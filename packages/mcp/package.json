@@ -1,0 +1,26 @@
+{
+  "name": "@eleanor4devs/mcp",
+  "version": "0.0.1",
+  "description": "Eleanor MCP server — single declarative verb `report({event, ...})`. Strict credential isolation. See spec §MCP and DD-11.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kychee-com/eleanor4devs.git",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://eleanor4devs.com",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "eleanor4devs-mcp": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "license": "UNLICENSED"
+}

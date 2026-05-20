@@ -1,0 +1,22 @@
+{
+  "name": "eleanor4devs-public",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Public packages for eleanor4devs — provider-contract, sdk, mcp, cli. See https://eleanor4devs.com.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "lint": "echo \"(no lint configured)\" && exit 0",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}

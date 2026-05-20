@@ -1,0 +1,26 @@
+{
+  "name": "@eleanor4devs/cli",
+  "version": "0.0.1",
+  "description": "Eleanor CLI — install MCP entry, install/list skill packs, auth, status. Run `eleanor4devs install`.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kychee-com/eleanor4devs.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://eleanor4devs.com",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "eleanor4devs": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "license": "UNLICENSED"
+}

@@ -1,0 +1,233 @@
+# Lockstep publish of all 4 @eleanor4devs/* packages to npm via Trusted Publisher OIDC.
+#
+# Triggered manually via:
+#   gh workflow run publish-all.yml -f bump=<patch|minor|major> -R kychee-com/eleanor4devs-private
+#
+# WHY OIDC instead of stored tokens:
+# No NPM_TOKEN stored as a GitHub Secret. The job exchanges its short-lived
+# GitHub OIDC token for an even-shorter-lived npm publish credential at the
+# moment of publish. npm verifies the exchange against the Trusted Publisher
+# configuration on each package's npm settings (org eleanor4devs, repo
+# kychee-com/eleanor4devs-private, this workflow file). If any of those
+# match-claims diverge, the exchange fails. Forking the repo, copying the
+# workflow into a different repo, or running an unauthorized branch all
+# fail the npm-side check.
+#
+# WHY id-token: write:
+# Required for GitHub to mint the OIDC token. Without this permission the
+# token isn't issued and `npm publish` falls back to looking for a stored
+# auth token — which doesn't exist here, so the publish would 401.
+#
+# WHY contents: write:
+# Used to commit the lockstep version bump back to main + push the v<x.y.z>
+# tag. The default GITHUB_TOKEN has this permission when the workflow
+# declares it.
+#
+# WHY lockstep (one workflow vs four):
+# DD-26 chose lockstep; DD-27 preserves it. The 4 packages have a dep order
+# (provider-contract → sdk → mcp + cli) and ship as a single version. A
+# partial publish (e.g. sdk succeeded but mcp failed) would leave the
+# registry in an inconsistent state, which is exactly what the
+# in-sequence-and-abort-on-failure structure of this job prevents. The
+# version-bump commit is the LAST step so a partial-fail run leaves no
+# trace on main.
+
+name: Publish all @eleanor4devs packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump kind (applied to all 4 packages in lockstep)'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: 'Dry run (build + smoke test only; no publish, no commit, no tag)'
+        type: boolean
+        default: false
+
+# Only one publish at a time on main. A second invocation queues behind any
+# in-flight publish so the version-bump commits stay ordered.
+concurrency:
+  group: publish-all
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Bump, smoke, publish all 4, tag
+    runs-on: ubuntu-latest
+    # Restrict to main. workflow_dispatch can target any branch in the UI,
+    # but we want the canonical published commit to come from main.
+    if: github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          # Node 24 ships npm 11.x. OIDC publish (the trusted-publisher
+          # token exchange) requires npm 11.5.1+; npm 10.x (bundled with
+          # Node 22) can still sign provenance attestations but doesn't
+          # know how to exchange the OIDC token for an npm publish
+          # credential — the publish then falls through to a missing
+          # token auth and 401s. Pinning to Node 24 is the cleanest way
+          # to guarantee the right npm.
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify npm has OIDC publish support
+        run: |
+          NPM_VER=$(npm --version)
+          echo "npm version: $NPM_VER"
+          node -e "const [a,b,c] = process.argv[1].split('.').map(Number); if (a < 11 || (a === 11 && b < 5) || (a === 11 && b === 5 && c < 1)) { console.error('npm '+process.argv[1]+' lacks OIDC trusted-publisher exchange (needs 11.5.1+)'); process.exit(1); }" "$NPM_VER"
+
+      - name: Configure git for commit + push
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run full test suite (skip live-network regression tests)
+        # Live-network tests (npm_published, voice_deploy, marketing_site)
+        # are POST-publish verification, not pre-publish gates. They check
+        # the deployed/published artifact - if we ran them here, the
+        # publish step would never happen because they assert state that
+        # only THIS workflow produces. Catch-22 broken by skipping them.
+        env:
+          ELEANOR4DEVS_SKIP_LIVE_NPM: "1"
+        run: npm test
+
+      - name: Compute new version (lockstep, applied to all 4 packages)
+        id: bump
+        run: |
+          set -euo pipefail
+          CUR=$(node -p "require('./packages/provider-contract/package.json').version")
+          # Bump provider-contract first to derive the new shared version,
+          # then mirror to the other 3.
+          (cd packages/provider-contract && npm version "${{ inputs.bump }}" --no-git-tag-version >/dev/null)
+          NEW=$(node -p "require('./packages/provider-contract/package.json').version")
+          for pkg in sdk mcp cli; do
+            (cd "packages/$pkg" && npm version "$NEW" --no-git-tag-version --allow-same-version >/dev/null)
+          done
+          echo "Lockstep bump: $CUR → $NEW"
+          echo "old=$CUR" >> "$GITHUB_OUTPUT"
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+
+      - name: Sync root lockfile to reflect new versions
+        run: npm install --package-lock-only
+
+      - name: Build all packages
+        run: npm run build --workspaces --if-present
+
+      - name: Tarball smoke test (each package in dep order)
+        run: |
+          set -euo pipefail
+          NEW="${{ steps.bump.outputs.new }}"
+          SMOKE=/tmp/smoke-eleanor4devs
+          rm -rf "$SMOKE" && mkdir "$SMOKE"
+          for pkg in provider-contract sdk mcp cli; do
+            echo "::group::Tarball smoke — @eleanor4devs/$pkg"
+            mkdir -p "$SMOKE/$pkg/extract"
+            (cd "packages/$pkg" && npm pack --pack-destination "$SMOKE/$pkg")
+            TGZ=$(ls "$SMOKE/$pkg/"*.tgz | head -n1)
+            tar xzf "$TGZ" -C "$SMOKE/$pkg/extract"
+            # Required artifacts on every package:
+            test -f "$SMOKE/$pkg/extract/package/package.json" || (echo "Missing package.json in $pkg tarball" && exit 1)
+            test -f "$SMOKE/$pkg/extract/package/README.md" || (echo "Missing README in $pkg tarball" && exit 1)
+            # No stray TS source files (only .d.ts types allowed):
+            STRAY_TS=$(find "$SMOKE/$pkg/extract/package" -name "*.ts" -not -name "*.d.ts" -print 2>/dev/null || true)
+            if [ -n "$STRAY_TS" ]; then
+              echo "Stray .ts files in $pkg tarball:"
+              echo "$STRAY_TS"
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Publish to npm in dep order
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          # Dep order: provider-contract first (the others depend on it),
+          # then sdk (mcp + cli depend on the SDK's typed surface), then
+          # mcp + cli in either order (they don't depend on each other).
+          for pkg in provider-contract sdk mcp cli; do
+            echo "::group::Publishing @eleanor4devs/$pkg"
+            cd "packages/$pkg"
+            # --provenance is optional under OIDC (provenance is generated
+            # implicitly), but the flag makes the intent explicit and would
+            # cause the publish to fail loudly if OIDC isn't actually wired
+            # — which is exactly what we want.
+            # --access public is required for first publish under a scoped
+            # name; harmless on subsequent publishes.
+            npm publish --access public --provenance
+            cd "$GITHUB_WORKSPACE"
+            echo "::endgroup::"
+          done
+
+      - name: Commit lockstep version bump
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          git add packages/provider-contract/package.json packages/sdk/package.json packages/mcp/package.json packages/cli/package.json package-lock.json
+          git commit -m "chore: bump @eleanor4devs/* to v${{ steps.bump.outputs.new }}"
+          git push origin main
+
+      - name: Tag and push
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          git tag "v${{ steps.bump.outputs.new }}"
+          git push origin "v${{ steps.bump.outputs.new }}"
+
+      - name: Create GitHub release
+        if: ${{ !inputs.dry_run }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.bump.outputs.new }}
+          name: '@eleanor4devs/* v${{ steps.bump.outputs.new }}'
+          generate_release_notes: true
+          target_commitish: main
+
+      - name: Summary
+        run: |
+          NEW="${{ steps.bump.outputs.new }}"
+          OLD="${{ steps.bump.outputs.old }}"
+          DRY="${{ inputs.dry_run }}"
+          {
+            echo "## @eleanor4devs/* publish summary"
+            echo ""
+            echo "- **Bump:** \`${{ inputs.bump }}\` ($OLD → $NEW)"
+            echo "- **Dry run:** $DRY"
+            if [ "$DRY" = "true" ]; then
+              echo ""
+              echo "_Dry run — no publish, no commit, no tag was made._"
+            else
+              echo ""
+              echo "### Published packages"
+              echo ""
+              echo "- https://www.npmjs.com/package/@eleanor4devs/provider-contract/v/$NEW"
+              echo "- https://www.npmjs.com/package/@eleanor4devs/sdk/v/$NEW"
+              echo "- https://www.npmjs.com/package/@eleanor4devs/mcp/v/$NEW"
+              echo "- https://www.npmjs.com/package/@eleanor4devs/cli/v/$NEW"
+              echo ""
+              echo "- **Tag:** \`v$NEW\`"
+              echo "- **Provenance attestation:** auto-generated via OIDC (4 packages)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

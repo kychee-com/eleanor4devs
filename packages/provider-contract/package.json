@@ -1,6 +1,6 @@
 {
   "name": "@eleanor4devs/provider-contract",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Common Provider Contract — shared TypeScript types for Eleanor's Provider Boxes (Claude Local, Codex Local). See docs/products/eleanor4devs/eleanor4devs-spec.md, DD-10.",
   "repository": {
     "type": "git",

@@ -158,58 +158,94 @@ describe("MCP CLI — --dry-run verb dispatch", () => {
 describe("MCP CLI — --verify supply-chain check", () => {
   // Inject the dependencies so the tests don't actually touch fs / network.
   // The Red Team's real test harness runs the binary end-to-end.
+  //
+  // F-007 fix (Cycle 4): verification compares the local tarball's SHA512
+  // (base64) against `meta.dist.integrity` (SRI format `sha512-<base64>`),
+  // NOT SHA256 against `meta.dist.shasum` (which is npm's legacy SHA1).
+  //
+  // The injected `sha512` dep returns raw base64 (no `sha512-` prefix);
+  // `verifyAgainstRegistry` is responsible for splitting the SRI prefix.
 
-  it("returns ok when local SHA256 matches the registry's published shasum", async () => {
+  it("returns ok when local SHA512 matches the registry's published integrity (SRI sha512)", async () => {
     const result: VerifyResult = await verifyAgainstRegistry({
       version: "1.0.0",
       readLocalTarball: async () => Buffer.from("fake-tarball-bytes"),
       fetchRegistryMeta: async () => ({
         version: "1.0.0",
         dist: {
-          // sha256 of "fake-tarball-bytes" (computed via shell `printf 'fake-tarball-bytes' | sha256sum`).
-          shasum: "fakefakefakefakefakefakefakefakefakefakefakefakefakefakefakefake",
+          // SRI format: algorithm prefix `sha512-` + base64 digest.
+          integrity:
+            "sha512-ZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZQ==",
+          // Legacy SHA1; still returned by the registry but ignored by --verify.
+          shasum: "0123456789abcdef0123456789abcdef01234567",
           // Provenance present (non-null) — proves OIDC was used.
           attestations: { url: "https://registry.npmjs.org/...", provenance: {} },
         },
       }),
-      // Tests inject a fixed sha256 instead of calling node:crypto.
-      sha256: (_buf) => "fakefakefakefakefakefakefakefakefakefakefakefakefakefakefakefake",
+      // Tests inject a fixed sha512 (raw base64; the verifier prepends `sha512-`).
+      sha512: (_buf) =>
+        "ZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZWZha2VmYWtlZmFrZQ==",
     });
     expect(result.ok).toBe(true);
     expect(result.version).toBe("1.0.0");
   });
 
-  it("returns ok=false with shasum_mismatch when bytes have been tampered with", async () => {
+  it("returns ok=false with integrity_mismatch when bytes have been tampered with", async () => {
     const result = await verifyAgainstRegistry({
       version: "1.0.0",
       readLocalTarball: async () => Buffer.from("tampered-bytes"),
       fetchRegistryMeta: async () => ({
         version: "1.0.0",
         dist: {
-          shasum: "expectedexpectedexpectedexpectedexpectedexpectedexpectedexpected",
+          integrity:
+            "sha512-ZXhwZWN0ZWRleHBlY3RlZGV4cGVjdGVkZXhwZWN0ZWRleHBlY3RlZGV4cGVjdGVkZXhwZWN0ZWRleHBlY3RlZGV4cGVjdGVkZXhwZWN0ZWRleHBlY3RlZGV4cGVjdGVkZXhwZWN0ZWQ=",
+          shasum: "0123456789abcdef0123456789abcdef01234567",
           attestations: { provenance: {} },
         },
       }),
-      sha256: () =>
-        "tamperedtamperedtamperedtamperedtamperedtamperedtamperedtampered",
+      sha512: () =>
+        "dGFtcGVyZWR0YW1wZXJlZHRhbXBlcmVkdGFtcGVyZWR0YW1wZXJlZHRhbXBlcmVkdGFtcGVyZWR0YW1wZXJlZHRhbXBlcmVkdGFtcGVyZWR0YW1wZXJlZHRhbXBlcmVkdGFtcGVyZWQ=",
     });
     expect(result.ok).toBe(false);
-    expect(result.error).toBe("shasum_mismatch");
+    expect(result.error).toBe("integrity_mismatch");
+    // Mention SHA512 + the expected value so operators can debug.
+    expect(result.detail).toContain("sha512");
     expect(result.detail).toContain("expected");
   });
 
-  it("returns ok=false with no_attestation when provenance is missing", async () => {
+  it("returns ok=false with no_integrity when registry meta omits dist.integrity", async () => {
+    const result = await verifyAgainstRegistry({
+      version: "1.0.0",
+      readLocalTarball: async () => Buffer.from("any"),
+      fetchRegistryMeta: async () => ({
+        version: "1.0.0",
+        // dist.integrity omitted — older npm metadata, or non-standard registry.
+        // The legacy `shasum` is present but the verifier must NOT fall back to it.
+        dist: {
+          shasum: "0123456789abcdef0123456789abcdef01234567",
+          attestations: { provenance: {} },
+        },
+      }),
+      sha512: () => "anyhashvalue==",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("no_integrity");
+    expect(result.detail).toMatch(/integrity/i);
+  });
+
+  it("returns ok=false with no_attestation when provenance is missing (integrity OK)", async () => {
     const result = await verifyAgainstRegistry({
       version: "1.0.0",
       readLocalTarball: async () => Buffer.from("any"),
       fetchRegistryMeta: async () => ({
         version: "1.0.0",
         dist: {
+          integrity: "sha512-YWJj",
           shasum: "abc",
           // attestations omitted — package was published without OIDC.
         },
       }),
-      sha256: () => "abc",
+      sha512: () => "YWJj",
     });
     expect(result.ok).toBe(false);
     expect(result.error).toBe("no_attestation");

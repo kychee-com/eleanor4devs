@@ -13,6 +13,9 @@
  */
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const REGISTRY_URL = "https://registry.npmjs.org/@eleanor4devs/mcp";
 const NPX_TIMEOUT_MS = 90_000;
@@ -32,7 +35,11 @@ async function latestVersion(): Promise<string> {
   return latest as string;
 }
 
-function runMcp(args: readonly string[], stdin?: string): { stdout: string; status: number | null } {
+function runMcp(
+  args: readonly string[],
+  stdin?: string,
+  env?: NodeJS.ProcessEnv,
+): { stdout: string; stderr: string; status: number | null } {
   const res = spawnSync(
     "npx",
     ["-y", `@eleanor4devs/mcp@latest`, ...args],
@@ -41,9 +48,43 @@ function runMcp(args: readonly string[], stdin?: string): { stdout: string; stat
       input: stdin,
       timeout: NPX_TIMEOUT_MS,
       shell: true,
+      env: env ?? process.env,
     },
   );
-  return { stdout: res.stdout ?? "", status: res.status };
+  return {
+    stdout: res.stdout ?? "",
+    stderr: res.stderr ?? "",
+    status: res.status,
+  };
+}
+
+/**
+ * Use `npm pack` to download the registry's own tarball for the latest
+ * version, then return its absolute path. The path is the input to the
+ * `--verify` flow (the binary reads it via ELEANOR4DEVS_VERIFY_TARBALL).
+ */
+function packLatest(): { path: string; version: string } {
+  const dir = mkdtempSync(join(tmpdir(), "eleanor4devs-mcp-pack-"));
+  const res = spawnSync(
+    "npm",
+    ["pack", "@eleanor4devs/mcp@latest", "--silent"],
+    {
+      cwd: dir,
+      encoding: "utf-8",
+      shell: true,
+      timeout: NPX_TIMEOUT_MS,
+    },
+  );
+  expect(res.status, `npm pack failed: ${res.stderr}`).toBe(0);
+  const tgz = readdirSync(dir).find((f) => f.endsWith(".tgz"));
+  expect(tgz, `expected one .tgz in ${dir}`).toBeTruthy();
+  const path = join(dir, tgz as string);
+  // Tarball filename shape: `eleanor4devs-mcp-X.Y.Z.tgz`.
+  const match = /eleanor4devs-mcp-(\d+\.\d+\.\d+(?:-[\w.-]+)?)\.tgz$/.exec(
+    tgz as string,
+  );
+  expect(match, `unexpected tarball filename: ${tgz}`).toBeTruthy();
+  return { path, version: (match as RegExpExecArray)[1]! };
 }
 
 describe.skipIf(SKIP_LIVE)(
@@ -101,6 +142,41 @@ describe.skipIf(SKIP_LIVE)(
         expect(stdout).toContain("unknown_verb");
       },
       NPX_TIMEOUT_MS + 5_000,
+    );
+
+    /**
+     * F-007 acceptance check: `--verify` against the registry's OWN
+     * tarball must return `{ok:true}`. We use `npm pack` to fetch the
+     * exact bytes the registry has for the latest version, then run
+     * `--verify` with ELEANOR4DEVS_VERIFY_TARBALL pointing at that file.
+     *
+     * Before F-007 was fixed (Cycle 4, v0.0.4 and earlier), this always
+     * returned `{ok:false, error:"shasum_mismatch"}` due to a SHA256-vs-
+     * SHA1 algorithm mismatch. From v0.0.5 onwards it must return ok.
+     */
+    it(
+      "`npx -y @eleanor4devs/mcp@latest --verify` returns {ok:true} against the registry's own tarball",
+      async () => {
+        const { path: tarballPath, version } = packLatest();
+        const { stdout, stderr, status } = runMcp(["--verify"], undefined, {
+          ...process.env,
+          ELEANOR4DEVS_VERIFY_TARBALL: tarballPath,
+        });
+        // Surface stderr for diagnosis if the assertion fails.
+        const trimmed = stdout.trim();
+        expect(
+          status,
+          `expected exit 0, stdout=${trimmed} stderr=${stderr}`,
+        ).toBe(0);
+        const parsed = JSON.parse(trimmed) as {
+          ok: boolean;
+          version: string;
+          error?: string;
+        };
+        expect(parsed.ok, `error=${parsed.error}`).toBe(true);
+        expect(parsed.version).toBe(version);
+      },
+      NPX_TIMEOUT_MS + 30_000,
     );
   },
 );

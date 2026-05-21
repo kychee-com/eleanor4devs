@@ -104,7 +104,20 @@ export function handleDryRunRequest(req: DryRunRequest): DryRunResult {
 // ---------------------------------------------------------------------------
 
 export interface RegistryDist {
-  shasum: string;
+  /**
+   * SRI-format integrity string, e.g. `sha512-<base64>`. Standard npm v5+
+   * tarball checksum. Per F-007 fix (Cycle 4): the only checksum the
+   * verifier honors.
+   */
+  integrity?: string;
+  /**
+   * npm's legacy SHA1 hex digest. Kept in the type for documentation
+   * (the registry still returns it) but explicitly NOT consulted by
+   * `verifyAgainstRegistry`. SHA1 is broken for collision resistance;
+   * comparing a SHA256 (or anything else) against it is a category error
+   * that produced the F-007 false-negative.
+   */
+  shasum?: string;
   attestations?: unknown;
 }
 
@@ -117,24 +130,41 @@ export interface VerifyDeps {
   version: string;
   readLocalTarball: () => Promise<Buffer>;
   fetchRegistryMeta: (version: string) => Promise<RegistryVersionMeta>;
-  sha256: (buf: Buffer) => string;
+  /**
+   * Compute the SHA512 digest of the given buffer and return it as raw
+   * base64 (no `sha512-` prefix). The verifier prepends the prefix when
+   * comparing against `meta.dist.integrity`.
+   */
+  sha512: (buf: Buffer) => string;
 }
 
 export interface VerifyResult {
   ok: boolean;
   version: string;
-  error?: "shasum_mismatch" | "no_attestation" | "version_mismatch";
+  error?:
+    | "integrity_mismatch"
+    | "no_integrity"
+    | "no_attestation"
+    | "version_mismatch";
   detail?: string;
 }
 
 /**
  * Verify the local install's tarball against the npm registry's published
- * shasum + provenance attestation.
+ * integrity (SRI sha512) + provenance attestation.
  *
  * Pure with respect to its injected dependencies — the production caller
  * provides `readLocalTarball` (reads the installed .tgz from disk),
  * `fetchRegistryMeta` (single GET to https://registry.npmjs.org), and
- * `sha256` (node:crypto). The test harness substitutes fakes.
+ * `sha512` (node:crypto, base64-encoded). The test harness substitutes
+ * fakes.
+ *
+ * F-007 (Cycle 4): this function previously compared a SHA256 hex against
+ * `meta.dist.shasum` (npm's legacy SHA1 hex). Those values can never
+ * match, so `--verify` reported `shasum_mismatch` even on a perfectly
+ * good install. Now it compares the local SHA512 base64 (prefixed with
+ * `sha512-`) against `meta.dist.integrity`, which IS the standard npm v5+
+ * tarball checksum.
  */
 export async function verifyAgainstRegistry(
   deps: VerifyDeps,
@@ -148,14 +178,34 @@ export async function verifyAgainstRegistry(
       detail: `registry returned version ${meta.version}, expected ${deps.version}`,
     };
   }
-  const local = await deps.readLocalTarball();
-  const localSha = deps.sha256(local);
-  if (localSha !== meta.dist.shasum) {
+  if (
+    meta.dist.integrity === undefined ||
+    meta.dist.integrity === null ||
+    meta.dist.integrity === ""
+  ) {
     return {
       ok: false,
       version: deps.version,
-      error: "shasum_mismatch",
-      detail: `local sha256 ${localSha} does not match expected ${meta.dist.shasum}`,
+      error: "no_integrity",
+      detail:
+        "npm registry metadata did not include `dist.integrity`. Standard " +
+        "npm v5+ tarballs publish an SRI sha512 string here. Refusing to " +
+        "fall back to the legacy `dist.shasum` (SHA1) — that comparison " +
+        "is what F-007 fixed. Remediation: re-publish via OIDC trusted-" +
+        "publisher (the publish-all.yml workflow does this automatically).",
+    };
+  }
+  const local = await deps.readLocalTarball();
+  const localBase64 = deps.sha512(local);
+  const expectedSri = meta.dist.integrity;
+  const actualSri = `sha512-${localBase64}`;
+  if (actualSri !== expectedSri) {
+    return {
+      ok: false,
+      version: deps.version,
+      error: "integrity_mismatch",
+      detail:
+        `local sha512 ${actualSri} does not match expected ${expectedSri}`,
     };
   }
   if (
@@ -268,8 +318,12 @@ async function runVerify(): Promise<VerifyResult> {
       }
       return (await res.json()) as RegistryVersionMeta;
     },
-    sha256: (buf: Buffer) =>
-      createHash("sha256").update(buf).digest("hex"),
+    // F-007 fix: integrity comparison uses SHA512 + base64 (SRI format),
+    // matching `meta.dist.integrity` (`sha512-<base64>`). NOT SHA256 hex
+    // (which was being compared against `meta.dist.shasum`, an unrelated
+    // SHA1 hex — the comparison could never succeed).
+    sha512: (buf: Buffer) =>
+      createHash("sha512").update(buf).digest("base64"),
   });
 }
 

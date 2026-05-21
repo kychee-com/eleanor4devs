@@ -23,7 +23,7 @@ import {
   ALWAYS_APPLY,
 } from "./commands/install_skills.js";
 import { listSkills } from "./commands/skills_list.js";
-import { authFlow } from "./commands/auth.js";
+import { authFlow, parseAuthArgs, TestModeNotEnabledError } from "./commands/auth.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // In dev tsc emits to dist/, so the bundled skills live one level up.
@@ -93,19 +93,44 @@ async function main(argv: string[]): Promise<number> {
       return 0;
     }
     case "auth": {
-      const result = await authFlow({
-        apiBase: process.env.ELEANOR4DEVS_API_BASE ?? DEFAULT_API_BASE,
-        display: (text) => {
+      // TR-006 (Phase 17): `--test-mode <code>` opts into the test-mode
+      // bypass. parseAuthArgs throws on `--test-mode` with no code.
+      let parsed;
+      try {
+        parsed = parseAuthArgs(rest);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(err instanceof Error ? err.message : String(err));
+        return 1;
+      }
+      try {
+        const baseOpts = {
+          apiBase: process.env.ELEANOR4DEVS_API_BASE ?? DEFAULT_API_BASE,
+          display: (text: string) => {
+            // eslint-disable-next-line no-console
+            console.log(text);
+          },
+          credentialsPath: CREDENTIALS_PATH,
+        };
+        // Only include `testMode` when it's set — exactOptionalPropertyTypes
+        // requires the key to be absent rather than `undefined`.
+        const result =
+          parsed.mode === "test"
+            ? await authFlow({ ...baseOpts, testMode: { code: parsed.code } })
+            : await authFlow(baseOpts);
+        // eslint-disable-next-line no-console
+        console.log(
+          `Linked. Refresh token saved to ${CREDENTIALS_PATH}. (token length: ${result.refreshToken.length})`,
+        );
+        return 0;
+      } catch (err) {
+        if (err instanceof TestModeNotEnabledError) {
           // eslint-disable-next-line no-console
-          console.log(text);
-        },
-        credentialsPath: CREDENTIALS_PATH,
-      });
-      // eslint-disable-next-line no-console
-      console.log(
-        `Linked. Refresh token saved to ${CREDENTIALS_PATH}. (token length: ${result.refreshToken.length})`,
-      );
-      return 0;
+          console.error(err.message);
+          return 1;
+        }
+        throw err;
+      }
     }
     case "skills": {
       if (rest[0] === "list") {
@@ -144,6 +169,10 @@ function printHelp(): void {
       "  eleanor4devs install-skills       install Core Skills Pack only",
       "  eleanor4devs skills list          list installed skills",
       "  eleanor4devs auth                 link this CLI to your Telegram account",
+      "  eleanor4devs auth --test-mode <code>",
+      "                                    one-shot test-mode bypass (Red Team",
+      "                                    /systemtest only; backend must run",
+      "                                    with ELEANOR_TEST_MODE=1)",
       "",
       "More: docs/products/eleanor4devs/eleanor4devs-spec.md",
     ].join("\n"),

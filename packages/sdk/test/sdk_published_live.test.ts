@@ -75,11 +75,14 @@ describe.skipIf(SKIP_LIVE)(
         );
 
         // (c) Run the spec smoke check.
+        // Quote the inline script so cmd.exe doesn't choke on the
+        // parentheses (`shell: true` invokes cmd.exe on Windows, which
+        // treats unquoted parens as grouping operators and exits 1).
         const smoke = spawnSync(
           "node",
           [
             "-e",
-            "import('@eleanor4devs/sdk').then(m => console.log(m.VERSION))",
+            `"import('@eleanor4devs/sdk').then(m => console.log(m.VERSION))"`,
           ],
           {
             cwd: tempDir!,
@@ -88,7 +91,10 @@ describe.skipIf(SKIP_LIVE)(
             shell: true,
           },
         );
-        expect(smoke.status).toBe(0);
+        expect(
+          smoke.status,
+          `smoke failed. stdout: ${smoke.stdout}\nstderr: ${smoke.stderr}`,
+        ).toBe(0);
 
         // (d) Assert the printed VERSION matches the registry's latest.
         const printed = smoke.stdout.trim();

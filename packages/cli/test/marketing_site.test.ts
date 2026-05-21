@@ -46,6 +46,16 @@ describe.skipIf(SKIP_LIVE)("F-002 regression — marketing site content", () => 
     expect(html).toMatch(/Node 20/);
   });
 
+  it("install page does NOT carry the stale mid-bootstrap notice (P3-3)", async () => {
+    // Cycle 3 P3-3 polish: the "Heads up — packages mid-bootstrap" notice
+    // was true during the F-001 bootstrap window but became misleading
+    // once v0.0.3 went live. Negative assertion ensures any future
+    // stale-copy revert breaks CI.
+    const html = await fetchBody("/install/");
+    expect(html).not.toMatch(/mid-bootstrap/i);
+    expect(html).not.toMatch(/packages aren['’]t live/i);
+  });
+
   it("privacy page covers no-new-vector principle + revoke", async () => {
     const html = await fetchBody("/privacy/");
     expect(html).toMatch(/no-new-vector/i);

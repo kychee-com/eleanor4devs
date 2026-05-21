@@ -35,10 +35,12 @@ describe("install — fresh install (no existing mcp_servers.json)", () => {
   it("creates mcp_servers.json with the eleanor4devs entry + installs Core Skills Pack", async () => {
     const home = freshHomeDir();
     const mcpConfigPath = join(home, ".claude", "mcp_servers.json");
+    const settingsPath = join(home, ".claude", "settings.json");
     const skillsTargetDir = join(home, ".claude", "skills", "eleanor4devs");
     try {
       const result = await install({
         mcpConfigPath,
+        settingsPath,
         skillsSourceDir: PACKAGED_SKILLS,
         skillsTargetDir,
         review: ALWAYS_APPLY,
@@ -68,6 +70,7 @@ describe("install — merge with existing mcp_servers.json", () => {
   it("preserves other agents' entries when adding the eleanor4devs entry", async () => {
     const home = freshHomeDir();
     const mcpConfigPath = join(home, ".claude", "mcp_servers.json");
+    const settingsPath = join(home, ".claude", "settings.json");
     const skillsTargetDir = join(home, ".claude", "skills", "eleanor4devs");
     try {
       // Pre-existing mcp_servers.json with someone else's entry.
@@ -91,6 +94,7 @@ describe("install — merge with existing mcp_servers.json", () => {
 
       await install({
         mcpConfigPath,
+        settingsPath,
         skillsSourceDir: PACKAGED_SKILLS,
         skillsTargetDir,
         review: ALWAYS_APPLY,
@@ -112,6 +116,7 @@ describe("install — merge with existing mcp_servers.json", () => {
   it("updates the eleanor4devs entry in place when it already exists", async () => {
     const home = freshHomeDir();
     const mcpConfigPath = join(home, ".claude", "mcp_servers.json");
+    const settingsPath = join(home, ".claude", "settings.json");
     const skillsTargetDir = join(home, ".claude", "skills", "eleanor4devs");
     try {
       mkdirSync(dirname(mcpConfigPath), { recursive: true });
@@ -127,6 +132,7 @@ describe("install — merge with existing mcp_servers.json", () => {
 
       await install({
         mcpConfigPath,
+        settingsPath,
         skillsSourceDir: PACKAGED_SKILLS,
         skillsTargetDir,
         review: ALWAYS_APPLY,

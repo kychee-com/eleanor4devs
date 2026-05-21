@@ -24,6 +24,7 @@ import {
 } from "./commands/install_skills.js";
 import { listSkills } from "./commands/skills_list.js";
 import { authFlow, parseAuthArgs, TestModeNotEnabledError } from "./commands/auth.js";
+import { parseHookArgs, readStdin, runHook } from "./commands/hook.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // In dev tsc emits to dist/, so the bundled skills live one level up.
@@ -35,6 +36,7 @@ const SKILLS_TARGET_DIR = join(
   "eleanor4devs",
 );
 const MCP_CONFIG_PATH = join(homedir(), ".claude", "mcp_servers.json");
+const SETTINGS_PATH = join(homedir(), ".claude", "settings.json");
 const CREDENTIALS_PATH = join(homedir(), ".eleanor4devs", "auth.json");
 const DEFAULT_API_BASE = "https://api.eleanor4devs.com";
 
@@ -54,15 +56,46 @@ async function main(argv: string[]): Promise<number> {
     case "install": {
       const result = await install({
         mcpConfigPath: MCP_CONFIG_PATH,
+        settingsPath: SETTINGS_PATH,
         skillsSourceDir: PACKAGED_SKILLS,
         skillsTargetDir: SKILLS_TARGET_DIR,
         review: ALWAYS_APPLY,
       });
       // eslint-disable-next-line no-console
       console.log(
-        `installed: ${result.skillsInstalled.length} skill(s); mcp entry written.`,
+        `installed: ${result.skillsInstalled.length} skill(s); mcp entry written; hook entries written.`,
       );
       return 0;
+    }
+    case "hook": {
+      let parsed;
+      try {
+        parsed = parseHookArgs(rest);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(err instanceof Error ? err.message : String(err));
+        return 1;
+      }
+      const stdinJson = await readStdin();
+      const backendUrl =
+        parsed.backendUrl ??
+        process.env.ELEANOR4DEVS_API_BASE ??
+        DEFAULT_API_BASE;
+      const result = await runHook({
+        hookName: parsed.hookName,
+        backendUrl,
+        stdinJson,
+      });
+      if (!result.ok) {
+        // eslint-disable-next-line no-console
+        console.error(
+          `eleanor4devs hook ${parsed.hookName}: ${result.reason ?? "failed"}`,
+        );
+      }
+      // Failure semantics mirror hook_lifecycle.py:
+      //   - after_create failure → exit 1 (FATAL — aborts dispatch)
+      //   - all others           → exit 0 (TOLERATED — logged, run continues)
+      return !result.ok && result.fatal ? 1 : 0;
     }
     case "install-skills": {
       if (rest.includes("--how-to")) {
@@ -165,7 +198,7 @@ function printHelp(): void {
       "eleanor4devs - the Eleanor CLI",
       "",
       "  eleanor4devs --version",
-      "  eleanor4devs install              install MCP entry + Core Skills Pack",
+      "  eleanor4devs install              install MCP entry + Core Skills Pack + hook templates",
       "  eleanor4devs install-skills       install Core Skills Pack only",
       "  eleanor4devs skills list          list installed skills",
       "  eleanor4devs auth                 link this CLI to your Telegram account",
@@ -173,6 +206,9 @@ function printHelp(): void {
       "                                    one-shot test-mode bypass (Red Team",
       "                                    /systemtest only; backend must run",
       "                                    with ELEANOR_TEST_MODE=1)",
+      "  eleanor4devs hook <event>         Claude Code hook intake (used internally",
+      "                                    by templates written to ~/.claude/settings.json:",
+      "                                    after_create | before_run | after_run | before_remove)",
       "",
       "More: docs/products/eleanor4devs/eleanor4devs-spec.md",
     ].join("\n"),

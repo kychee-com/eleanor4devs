@@ -17,13 +17,49 @@
  *   - before_run / after_run / before_remove → exit 0 on POST failure
  *     (TOLERATED, logged but never aborts the agent)
  */
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 
 import {
   runHook,
   parseHookArgs,
   type HookCallResult,
 } from "../src/commands/hook.js";
+
+/**
+ * Phase 19 (Group D) added a state-gate at the top of `runHook`. The
+ * existing POST-path tests below pre-date Phase 19 and assume reporting
+ * is ON. We seed a temp state.json with `enabled: true` for the test
+ * suite's lifetime so the legacy tests continue to exercise the POST
+ * code path (they cover stdin parsing, failure semantics, Windows
+ * portability — orthogonal to the state-gate, which is covered by
+ * `hook_state_gate.test.ts`).
+ */
+let SEEDED_STATE_PATH: string;
+let SEEDED_STATE_DIR: string;
+beforeAll(() => {
+  SEEDED_STATE_DIR = mkdtempSync(join(tmpdir(), "e4d-hook-cmd-state-"));
+  SEEDED_STATE_PATH = join(SEEDED_STATE_DIR, "state.json");
+  mkdirSync(dirname(SEEDED_STATE_PATH), { recursive: true });
+  writeFileSync(
+    SEEDED_STATE_PATH,
+    JSON.stringify({
+      enabled: true,
+      toggled_at: "2026-05-28T15:42:00.000Z",
+    }),
+    "utf-8",
+  );
+});
+afterAll(() => {
+  rmSync(SEEDED_STATE_DIR, { recursive: true, force: true });
+});
 
 interface CapturedPost {
   url: string;
@@ -82,6 +118,7 @@ describe("runHook — POST to backend", () => {
       backendUrl: "https://api.example.test",
       stdinJson: '{"session_id": "s1", "cwd": "/x"}',
       fetch: makeFakeFetch(200, captured),
+      statePath: SEEDED_STATE_PATH,
     });
     expect(result.ok).toBe(true);
     expect(captured).toHaveLength(1);
@@ -106,6 +143,7 @@ describe("runHook — POST to backend", () => {
       backendUrl: "https://api.example.test",
       stdinJson: "",
       fetch: makeFakeFetch(200, captured),
+      statePath: SEEDED_STATE_PATH,
     });
     expect(result.ok).toBe(true);
     const body = JSON.parse(String(captured[0]!.init?.body ?? "{}")) as Record<
@@ -122,6 +160,7 @@ describe("runHook — POST to backend", () => {
       backendUrl: "https://api.example.test",
       stdinJson: "not-json{",
       fetch: makeFakeFetch(200, captured),
+      statePath: SEEDED_STATE_PATH,
     });
     // Tolerated hook: we still report the failure to the backend, but
     // do not raise — the goal is that the agent run continues.
@@ -147,6 +186,7 @@ describe("runHook — failure semantics mirror hook_lifecycle.py", () => {
       backendUrl: "https://api.example.test",
       stdinJson: "{}",
       fetch: makeBoomFetch(),
+      statePath: SEEDED_STATE_PATH,
     });
     expect(result.ok).toBe(false);
     expect(result.fatal).toBe(true);
@@ -158,6 +198,7 @@ describe("runHook — failure semantics mirror hook_lifecycle.py", () => {
       backendUrl: "https://api.example.test",
       stdinJson: "{}",
       fetch: makeBoomFetch(),
+      statePath: SEEDED_STATE_PATH,
     });
     expect(result.ok).toBe(false);
     expect(result.fatal).toBe(false);
@@ -170,6 +211,7 @@ describe("runHook — failure semantics mirror hook_lifecycle.py", () => {
         backendUrl: "https://api.example.test",
         stdinJson: "{}",
         fetch: makeBoomFetch(),
+        statePath: SEEDED_STATE_PATH,
       });
       expect(result.fatal).toBe(false);
     }
@@ -182,6 +224,7 @@ describe("runHook — failure semantics mirror hook_lifecycle.py", () => {
       backendUrl: "https://api.example.test",
       stdinJson: "{}",
       fetch: makeFakeFetch(500, captured),
+      statePath: SEEDED_STATE_PATH,
     });
     expect(result.ok).toBe(false);
     expect(result.fatal).toBe(true);
@@ -197,6 +240,7 @@ describe("runHook — Windows portability", () => {
       backendUrl: "https://api.example.test",
       stdinJson: '{"session_id": "s1"}\r\n',
       fetch: makeFakeFetch(200, captured),
+      statePath: SEEDED_STATE_PATH,
     });
     expect(result.ok).toBe(true);
     const body = JSON.parse(String(captured[0]!.init?.body ?? "{}")) as Record<
@@ -213,6 +257,7 @@ describe("runHook — Windows portability", () => {
       backendUrl: "https://api.example.test",
       stdinJson: '﻿{"session_id": "s1"}',
       fetch: makeFakeFetch(200, captured),
+      statePath: SEEDED_STATE_PATH,
     });
     expect(result.ok).toBe(true);
     const body = JSON.parse(String(captured[0]!.init?.body ?? "{}")) as Record<

@@ -72,6 +72,8 @@ describe("install — Claude Code hook templates", () => {
         settingsPath,
         skillsSourceDir: PACKAGED_SKILLS,
         skillsTargetDir,
+        commandsDir: join(home, ".claude", "commands"),
+        statePath: join(home, ".eleanor4devs", "state.json"),
         review: ALWAYS_APPLY,
       });
 
@@ -137,6 +139,8 @@ describe("install — Claude Code hook templates", () => {
         settingsPath,
         skillsSourceDir: PACKAGED_SKILLS,
         skillsTargetDir,
+        commandsDir: join(home, ".claude", "commands"),
+        statePath: join(home, ".eleanor4devs", "state.json"),
         review: ALWAYS_APPLY,
       });
 
@@ -202,6 +206,8 @@ describe("install — Claude Code hook templates", () => {
         settingsPath,
         skillsSourceDir: PACKAGED_SKILLS,
         skillsTargetDir,
+        commandsDir: join(home, ".claude", "commands"),
+        statePath: join(home, ".eleanor4devs", "state.json"),
         review: ALWAYS_APPLY,
       });
 
@@ -211,6 +217,8 @@ describe("install — Claude Code hook templates", () => {
         settingsPath,
         skillsSourceDir: PACKAGED_SKILLS,
         skillsTargetDir,
+        commandsDir: join(home, ".claude", "commands"),
+        statePath: join(home, ".eleanor4devs", "state.json"),
         review: ALWAYS_APPLY,
       });
 
@@ -242,6 +250,8 @@ describe("install — Claude Code hook templates", () => {
         settingsPath,
         skillsSourceDir: PACKAGED_SKILLS,
         skillsTargetDir,
+        commandsDir: join(home, ".claude", "commands"),
+        statePath: join(home, ".eleanor4devs", "state.json"),
         review: ALWAYS_APPLY,
       });
       const raw = readFileSync(settingsPath, "utf-8");

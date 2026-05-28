@@ -34,6 +34,7 @@ import {
   ELEANOR_HOOK_NAMES,
   type EleanorHookName,
 } from "./hook_templates.js";
+import { readReportingState } from "../state.js";
 
 /** Hooks whose failure aborts dispatch — must equal `FATAL_HOOKS` in `hook_lifecycle.py`. */
 const FATAL_HOOKS: ReadonlySet<EleanorHookName> = new Set([
@@ -89,6 +90,15 @@ export interface RunHookOptions {
   /** Raw stdin contents. May be empty; may have a BOM or trailing CRLF on Windows. */
   stdinJson: string;
   fetch?: typeof globalThis.fetch;
+  /**
+   * Local Reporting Control state-file path (Phase 19). Defaults in
+   * cli.ts to `STATE_PATH`; tests inject a temp path. When the state
+   * resolves to OFF (explicit OFF, or fail-closed OFF for a missing /
+   * corrupt file per [[DD-42]]), `runHook` returns `{ok: true, fatal:
+   * false}` immediately without calling fetch, writing stdout, or
+   * touching the audit log.
+   */
+  statePath?: string;
 }
 
 /** Strip a UTF-8 BOM + trailing whitespace from a stdin payload. */
@@ -102,6 +112,23 @@ function normalizeStdin(raw: string): string {
 }
 
 export async function runHook(opts: RunHookOptions): Promise<HookCallResult> {
+  // INVARIANT (Phase 19, [[DD-42]] + [[DD-43]]): When reporting is OFF,
+  // this function MUST make no network call and produce no side effect
+  // beyond reading the state file. The early-return below is the very
+  // first observable behavior after the state read — placed BEFORE
+  // fetch resolution, BEFORE stdin normalization, BEFORE URL
+  // construction, BEFORE JSON parsing. This ordering matters: a
+  // corrupt state file fails closed to OFF, and an OFF state must
+  // produce ok=true, fatal=false (not fatal=true) so that
+  // after_create's normally-FATAL semantics do NOT abort Claude
+  // dispatch when the user simply hasn't opted in to reporting.
+  const state = readReportingState(
+    opts.statePath !== undefined ? { statePath: opts.statePath } : {},
+  );
+  if (!state.enabled) {
+    return { ok: true, fatal: false };
+  }
+
   const fetchFn = opts.fetch ?? globalThis.fetch.bind(globalThis);
   const fatal = FATAL_HOOKS.has(opts.hookName);
   const url = `${opts.backendUrl.replace(/\/$/, "")}/hooks/${opts.hookName}`;

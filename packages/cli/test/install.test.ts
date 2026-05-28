@@ -43,6 +43,8 @@ describe("install — fresh install (no existing mcp_servers.json)", () => {
         settingsPath,
         skillsSourceDir: PACKAGED_SKILLS,
         skillsTargetDir,
+        commandsDir: join(home, ".claude", "commands"),
+        statePath: join(home, ".eleanor4devs", "state.json"),
         review: ALWAYS_APPLY,
       });
       expect(result.mcpEntryWritten).toBe(true);
@@ -97,6 +99,8 @@ describe("install — merge with existing mcp_servers.json", () => {
         settingsPath,
         skillsSourceDir: PACKAGED_SKILLS,
         skillsTargetDir,
+        commandsDir: join(home, ".claude", "commands"),
+        statePath: join(home, ".eleanor4devs", "state.json"),
         review: ALWAYS_APPLY,
       });
 
@@ -135,6 +139,8 @@ describe("install — merge with existing mcp_servers.json", () => {
         settingsPath,
         skillsSourceDir: PACKAGED_SKILLS,
         skillsTargetDir,
+        commandsDir: join(home, ".claude", "commands"),
+        statePath: join(home, ".eleanor4devs", "state.json"),
         review: ALWAYS_APPLY,
       });
 

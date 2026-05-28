@@ -18,7 +18,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   installSkills,
@@ -38,6 +38,21 @@ const ELEANOR_MCP_ENTRY = {
   args: ["-y", "@eleanor4devs/mcp"],
 };
 
+/**
+ * Canonical body of `~/.claude/commands/e4d.md` (Phase 19, [[DD-41]]).
+ *
+ * Claude Code's slash-command discovery reads markdown files from
+ * `~/.claude/commands/<name>.md`. Lines beginning with `!` execute as
+ * bash via Claude Code's command-passthrough syntax. The single source
+ * of truth for this file body lives here so install + tests + future
+ * docs all reference the same string.
+ */
+export const E4D_SLASH_COMMAND_BODY =
+  "---\n" +
+  "description: Toggle Eleanor4Devs local reporting (ON / OFF)\n" +
+  "---\n" +
+  "!eleanor4devs toggle\n";
+
 export interface InstallOptions {
   /** Path to the agent's MCP config (e.g., ~/.claude/mcp_servers.json). */
   mcpConfigPath: string;
@@ -47,6 +62,19 @@ export interface InstallOptions {
   skillsSourceDir: string;
   /** Where to write skills on the user's machine. */
   skillsTargetDir: string;
+  /**
+   * Directory where Claude Code looks up user slash commands. Phase 19
+   * writes `e4d.md` here. Defaults in cli.ts to
+   * `~/.claude/commands`; tests inject a temp dir.
+   */
+  commandsDir: string;
+  /**
+   * Path to `~/.eleanor4devs/state.json` (the Local Reporting Control
+   * state file). Phase 19 initializes this to `{enabled: false,
+   * toggled_at: null}` on a fresh install ONLY — re-running install on
+   * an existing file (even a corrupt one) leaves the file untouched.
+   */
+  statePath: string;
   /** Skill review hook. Defaults to ALWAYS_APPLY via installSkills. */
   review?: SkillReview;
 }
@@ -56,11 +84,17 @@ export interface InstallResult {
   hookEntriesWritten: boolean;
   skillsInstalled: string[];
   skillsSkipped: string[];
+  /** True on every install run — the slash-command file is always written (overwrite-safe). */
+  slashCommandWritten: boolean;
+  /** True iff this install run created `state.json` because the file didn't exist. */
+  stateInitialized: boolean;
 }
 
 export async function install(options: InstallOptions): Promise<InstallResult> {
   writeMcpEntry(options.mcpConfigPath);
   writeHookEntries(options.settingsPath);
+  writeSlashCommand(options.commandsDir);
+  const stateInitialized = initializeStateFile(options.statePath);
   const skillsResult = await installSkills({
     sourceDir: options.skillsSourceDir,
     targetDir: options.skillsTargetDir,
@@ -71,7 +105,42 @@ export async function install(options: InstallOptions): Promise<InstallResult> {
     hookEntriesWritten: true,
     skillsInstalled: skillsResult.installed,
     skillsSkipped: skillsResult.skipped,
+    slashCommandWritten: true,
+    stateInitialized,
   };
+}
+
+/**
+ * Write `<commandsDir>/e4d.md` with the canonical slash-command body.
+ * Always overwrites — the body is deterministic, so a user who deleted
+ * a line gets the canonical file back on re-install.
+ */
+function writeSlashCommand(commandsDir: string): void {
+  mkdirSync(commandsDir, { recursive: true });
+  const path = join(commandsDir, "e4d.md");
+  writeFileSync(path, E4D_SLASH_COMMAND_BODY, "utf-8");
+}
+
+/**
+ * If `statePath` does not exist, create it with the OFF default
+ * `{enabled: false, toggled_at: null}` and return true. If it already
+ * exists — corrupt or well-formed — leave it untouched and return
+ * false. Rationale (per Phase 19 Group C task 2):
+ *   - Overwriting a toggled-ON file would silently re-disable a user
+ *     who opted in. Privacy-correct default is to preserve user state.
+ *   - Overwriting a corrupt file would erase forensic evidence; the
+ *     fail-closed reader treats corrupt-as-OFF anyway, so the user is
+ *     no worse off (still OFF) but the corruption can be diagnosed.
+ */
+function initializeStateFile(statePath: string): boolean {
+  if (existsSync(statePath)) {
+    return false;
+  }
+  mkdirSync(dirname(statePath), { recursive: true });
+  const body =
+    JSON.stringify({ enabled: false, toggled_at: null }, null, 2) + "\n";
+  writeFileSync(statePath, body, "utf-8");
+  return true;
 }
 
 function writeMcpEntry(configPath: string): void {

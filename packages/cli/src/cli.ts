@@ -7,13 +7,14 @@
  *   eleanor4devs install                          (Task 8)
  *   eleanor4devs install-skills [--core|--how-to]
  *   eleanor4devs skills list
- *   eleanor4devs auth                             (Task 9 — TODO)
- *   eleanor4devs status                           (TODO)
+ *   eleanor4devs auth                             (Task 9)
+ *   eleanor4devs on / off / toggle                (Phase 19)
+ *   eleanor4devs status                           (Phase 19)
  *
  * Spec: docs/products/eleanor4devs/eleanor4devs-spec.md § CLI.
  */
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 
 import { CLI_VERSION } from "./index.js";
@@ -25,6 +26,9 @@ import {
 import { listSkills } from "./commands/skills_list.js";
 import { authFlow, parseAuthArgs, TestModeNotEnabledError } from "./commands/auth.js";
 import { parseHookArgs, readStdin, runHook } from "./commands/hook.js";
+import { runOn, runOff, runToggle } from "./commands/toggle.js";
+import { runStatus } from "./commands/status.js";
+import { DEFAULT_AUDIT_LOG_PATH } from "./audit.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // In dev tsc emits to dist/, so the bundled skills live one level up.
@@ -37,10 +41,17 @@ const SKILLS_TARGET_DIR = join(
 );
 const MCP_CONFIG_PATH = join(homedir(), ".claude", "mcp_servers.json");
 const SETTINGS_PATH = join(homedir(), ".claude", "settings.json");
+const COMMANDS_DIR = join(homedir(), ".claude", "commands");
 const CREDENTIALS_PATH = join(homedir(), ".eleanor4devs", "auth.json");
+/**
+ * Reporting-state file path (Phase 19, [[DD-40]]). Same default as
+ * `DEFAULT_STATE_PATH` in `src/state.ts`; kept here next to
+ * CREDENTIALS_PATH so every CLI command resolves the same paths.
+ */
+export const STATE_PATH = join(homedir(), ".eleanor4devs", "state.json");
 const DEFAULT_API_BASE = "https://api.eleanor4devs.com";
 
-async function main(argv: string[]): Promise<number> {
+export async function main(argv: string[]): Promise<number> {
   const [first, ...rest] = argv;
   switch (first) {
     case undefined:
@@ -59,11 +70,13 @@ async function main(argv: string[]): Promise<number> {
         settingsPath: SETTINGS_PATH,
         skillsSourceDir: PACKAGED_SKILLS,
         skillsTargetDir: SKILLS_TARGET_DIR,
+        commandsDir: COMMANDS_DIR,
+        statePath: STATE_PATH,
         review: ALWAYS_APPLY,
       });
       // eslint-disable-next-line no-console
       console.log(
-        `installed: ${result.skillsInstalled.length} skill(s); mcp entry written; hook entries written.`,
+        `installed: ${result.skillsInstalled.length} skill(s); mcp entry written; hook entries written; /e4d slash command ${result.slashCommandWritten ? "written" : "skipped"}; reporting state ${result.stateInitialized ? "initialized to OFF" : "preserved"}.`,
       );
       return 0;
     }
@@ -85,6 +98,7 @@ async function main(argv: string[]): Promise<number> {
         hookName: parsed.hookName,
         backendUrl,
         stdinJson,
+        statePath: STATE_PATH,
       });
       if (!result.ok) {
         // eslint-disable-next-line no-console
@@ -124,6 +138,37 @@ async function main(argv: string[]): Promise<number> {
       // eslint-disable-next-line no-console
       console.log(`installed: ${result.installed.length} skill(s).`);
       return 0;
+    }
+    case "on": {
+      return runOn({
+        statePath: STATE_PATH,
+        auditLogPath: DEFAULT_AUDIT_LOG_PATH,
+        // eslint-disable-next-line no-console
+        log: (text: string) => console.log(text),
+      });
+    }
+    case "off": {
+      return runOff({
+        statePath: STATE_PATH,
+        auditLogPath: DEFAULT_AUDIT_LOG_PATH,
+        // eslint-disable-next-line no-console
+        log: (text: string) => console.log(text),
+      });
+    }
+    case "toggle": {
+      return runToggle({
+        statePath: STATE_PATH,
+        auditLogPath: DEFAULT_AUDIT_LOG_PATH,
+        // eslint-disable-next-line no-console
+        log: (text: string) => console.log(text),
+      });
+    }
+    case "status": {
+      return runStatus({
+        statePath: STATE_PATH,
+        // eslint-disable-next-line no-console
+        log: (text: string) => console.log(text),
+      });
     }
     case "auth": {
       // TR-006 (Phase 17): `--test-mode <code>` opts into the test-mode
@@ -201,6 +246,10 @@ function printHelp(): void {
       "  eleanor4devs install              install MCP entry + Core Skills Pack + hook templates",
       "  eleanor4devs install-skills       install Core Skills Pack only",
       "  eleanor4devs skills list          list installed skills",
+      "  eleanor4devs on                   enable local reporting (Local Reporting Control)",
+      "  eleanor4devs off                  disable local reporting (Local Reporting Control)",
+      "  eleanor4devs toggle               flip local reporting state (invoked by /e4d)",
+      "  eleanor4devs status               show current reporting state + last-toggle time",
       "  eleanor4devs auth                 link this CLI to your Telegram account",
       "  eleanor4devs auth --test-mode <code>",
       "                                    one-shot test-mode bypass (Red Team",
@@ -215,15 +264,34 @@ function printHelp(): void {
   );
 }
 
-// eslint-disable-next-line no-undef
-main(process.argv.slice(2))
-  .then((code) => {
-    // eslint-disable-next-line no-undef
-    process.exit(code);
-  })
-  .catch((err) => {
-    // eslint-disable-next-line no-console
-    console.error(err);
-    // eslint-disable-next-line no-undef
-    process.exit(1);
-  });
+/**
+ * Auto-invoke `main` only when this file is the entrypoint — never when
+ * it's imported (e.g. from a test that wants to call `main([...])` with
+ * a fake argv). The ESM-safe entrypoint check compares this file's URL
+ * to the process's argv[1] URL.
+ */
+function isCliEntrypoint(): boolean {
+  // eslint-disable-next-line no-undef
+  const argv1 = process.argv[1];
+  if (!argv1) return false;
+  try {
+    return import.meta.url === pathToFileURL(resolve(argv1)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isCliEntrypoint()) {
+  // eslint-disable-next-line no-undef
+  main(process.argv.slice(2))
+    .then((code) => {
+      // eslint-disable-next-line no-undef
+      process.exit(code);
+    })
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error(err);
+      // eslint-disable-next-line no-undef
+      process.exit(1);
+    });
+}

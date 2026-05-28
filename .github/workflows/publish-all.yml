@@ -103,6 +103,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build all packages (pre-test — runtime tests need dist/)
+        # MUST run before `npm test`. Several tests spawn the built binary
+        # via `node packages/<pkg>/dist/cli.js`:
+        #   - packages/mcp/test/no_new_vector_runtime.test.ts (Phase 11)
+        #   - packages/cli/test/cli_toggle_dispatch.test.ts   (Phase 19)
+        # Without this step, those tests fail with `Cannot find module
+        # .../dist/cli.js`. There is a second `npm run build` after the
+        # version bump (line ~136) to rebuild against the new version
+        # strings — that one stays, and this one is the pre-test build.
+        run: npm run build --workspaces --if-present
+
       - name: Run full test suite (skip live-network regression tests)
         # Live-network tests (npm_published, voice_deploy, marketing_site)
         # are POST-publish verification, not pre-publish gates. They check

@@ -26,7 +26,7 @@ import {
 } from "./install_skills.js";
 import {
   buildHookEntries,
-  ELEANOR_HOOK_MATCHER,
+  isEleanorHookEntry,
   type ClaudeHookEntry,
 } from "./hook_templates.js";
 
@@ -203,12 +203,11 @@ function writeHookEntries(settingsPath: string): void {
   const mergedHooks: Record<string, ClaudeHookEntry[]> = {};
 
   // Start with every event the user already had — but strip any
-  // eleanor4devs-owned entries from each event's list so we can add
-  // fresh ones below.
+  // eleanor4devs-owned entries (identified by command prefix, or the
+  // legacy "eleanor4devs" matcher from ≤v0.0.12) from each event's list
+  // so we can add fresh ones below. Other agents' hooks are untouched.
   for (const [eventName, list] of Object.entries(existingHooks)) {
-    mergedHooks[eventName] = list.filter(
-      (e) => e.matcher !== ELEANOR_HOOK_MATCHER,
-    );
+    mergedHooks[eventName] = list.filter((e) => !isEleanorHookEntry(e));
   }
 
   // Append our entries, preserving other agents' entries in the same event.

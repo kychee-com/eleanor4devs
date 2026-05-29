@@ -50,17 +50,50 @@ export const ELEANOR_HOOK_EVENT_MAP: Record<EleanorHookName, string> = {
 };
 
 /**
- * The `matcher` value we use for every eleanor4devs hook entry. Claude
- * Code's matcher field is normally a tool name (Bash, Read, ...) for
- * tool-related hooks, but it's a free-form string and we use a stable
- * identifier here so we can find + replace our own entry on re-install
- * without touching other agents' hooks.
+ * Matcher for our hook entries.
+ *
+ * GOTCHA (fixed in v0.0.13): the matcher is NOT a free-form identifier.
+ * For `SessionStart` and `SessionEnd`, Claude Code treats `matcher` as a
+ * SESSION SOURCE filter (`startup|resume|clear|compact` for SessionStart;
+ * `clear|logout|prompt_input_exit|other` for SessionEnd) — an arbitrary
+ * string like "eleanor4devs" matches NO source, so the hook NEVER FIRES.
+ * (For `UserPromptSubmit`/`Stop` the matcher is silently ignored, which is
+ * why those fired while SessionStart/SessionEnd silently didn't.)
+ *
+ * The empty string `""` means "match all" for every event, and is the
+ * safe universal value. We therefore identify our own entries by their
+ * COMMAND prefix (see `isEleanorHookEntry`), not by the matcher.
  */
-export const ELEANOR_HOOK_MATCHER = "eleanor4devs";
+export const ELEANOR_HOOK_MATCHER = "";
 
-/** Shape of a single hook entry within `settings.json.hooks[<event>]`. */
+/** Command prefix that uniquely identifies an eleanor4devs-owned hook entry. */
+export const ELEANOR_HOOK_COMMAND_PREFIX = "eleanor4devs hook ";
+
+/** Matcher used by installs ≤ v0.0.12 — detected on re-install so the old, never-firing entries get cleaned up. */
+export const LEGACY_ELEANOR_HOOK_MATCHER = "eleanor4devs";
+
+/**
+ * Is this hook entry one of ours? Identified by the command prefix (the
+ * stable identifier) OR the legacy matcher (so re-installing over a
+ * ≤v0.0.12 config removes the broken old entries).
+ */
+export function isEleanorHookEntry(entry: {
+  matcher?: string;
+  hooks?: ReadonlyArray<{ command?: string }>;
+}): boolean {
+  if (entry.matcher === LEGACY_ELEANOR_HOOK_MATCHER) return true;
+  return (entry.hooks ?? []).some(
+    (h) =>
+      typeof h.command === "string" &&
+      h.command.startsWith(ELEANOR_HOOK_COMMAND_PREFIX),
+  );
+}
+
+/** Shape of a single hook entry within `settings.json.hooks[<event>]`.
+ * `matcher` is OPTIONAL — Claude Code allows omitting it (match-all), and
+ * other agents' pre-existing entries may not set it. */
 export interface ClaudeHookEntry {
-  matcher: string;
+  matcher?: string;
   hooks: Array<{ type: "command"; command: string }>;
 }
 

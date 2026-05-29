@@ -39,7 +39,9 @@ import { ALWAYS_APPLY } from "../src/commands/install_skills.js";
 import {
   ELEANOR_HOOK_EVENT_MAP,
   ELEANOR_HOOK_MATCHER,
+  LEGACY_ELEANOR_HOOK_MATCHER,
   buildHookEntries,
+  isEleanorHookEntry,
 } from "../src/commands/hook_templates.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -86,8 +88,8 @@ describe("install — Claude Code hook templates", () => {
       for (const [, claudeEvent] of Object.entries(ELEANOR_HOOK_EVENT_MAP)) {
         const entries = settings.hooks?.[claudeEvent] ?? [];
         expect(entries.length).toBeGreaterThan(0);
-        // Exactly one of them must be ours, identified by our matcher.
-        const ours = entries.filter((e) => e.matcher === ELEANOR_HOOK_MATCHER);
+        // Exactly one of them must be ours, identified by command prefix.
+        const ours = entries.filter((e) => isEleanorHookEntry(e));
         expect(ours).toHaveLength(1);
         // The hook must shell out to the eleanor4devs CLI.
         expect(ours[0]!.hooks).toHaveLength(1);
@@ -165,7 +167,7 @@ describe("install — Claude Code hook templates", () => {
       ]);
 
       // Our entries are present alongside.
-      const ours = sessionStart.find((e) => e.matcher === ELEANOR_HOOK_MATCHER);
+      const ours = sessionStart.find((e) => isEleanorHookEntry(e));
       expect(ours).toBeDefined();
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -179,14 +181,17 @@ describe("install — Claude Code hook templates", () => {
     const skillsTargetDir = join(home, ".claude", "skills", "eleanor4devs");
     try {
       mkdirSync(dirname(settingsPath), { recursive: true });
-      // Pre-existing eleanor4devs entry with an older command shape.
+      // Pre-existing LEGACY (≤v0.0.12) eleanor4devs entry: the broken
+      // matcher "eleanor4devs" + an older command shape. Re-install must
+      // detect + remove it (via the legacy-matcher branch of
+      // isEleanorHookEntry) and replace it with the corrected entry.
       writeFileSync(
         settingsPath,
         JSON.stringify({
           hooks: {
             SessionStart: [
               {
-                matcher: ELEANOR_HOOK_MATCHER,
+                matcher: LEGACY_ELEANOR_HOOK_MATCHER,
                 hooks: [
                   {
                     type: "command",
@@ -225,12 +230,14 @@ describe("install — Claude Code hook templates", () => {
       const settings = JSON.parse(
         readFileSync(settingsPath, "utf-8"),
       ) as ClaudeSettings;
-      const ours = (settings.hooks?.SessionStart ?? []).filter(
-        (e) => e.matcher === ELEANOR_HOOK_MATCHER,
+      const ours = (settings.hooks?.SessionStart ?? []).filter((e) =>
+        isEleanorHookEntry(e),
       );
       // Exactly one eleanor4devs entry, despite running install twice
-      // and starting from a pre-existing stale entry.
+      // and starting from a pre-existing stale (legacy-matcher) entry.
       expect(ours).toHaveLength(1);
+      // And the broken legacy matcher is gone — replaced with match-all "".
+      expect(ours[0]!.matcher).toBe("");
       // The command was upgraded from the old binary name.
       expect(ours[0]!.hooks[0]!.command).not.toMatch(/old-eleanor4devs-binary/);
       expect(ours[0]!.hooks[0]!.command).toMatch(/eleanor4devs hook /);
@@ -274,7 +281,7 @@ describe("buildHookEntries — canonical hook template shape", () => {
     );
   });
 
-  it("each Claude Code event entry contains a hook entry with the eleanor4devs matcher and a `command` typed hook", () => {
+  it("each Claude Code event entry uses the match-all matcher and a `command` typed hook", () => {
     const entries = buildHookEntries();
     for (const [, list] of Object.entries(entries)) {
       expect(list).toHaveLength(1);
@@ -282,6 +289,18 @@ describe("buildHookEntries — canonical hook template shape", () => {
       expect(entry!.matcher).toBe(ELEANOR_HOOK_MATCHER);
       expect(entry!.hooks).toHaveLength(1);
       expect(entry!.hooks[0]!.type).toBe("command");
+    }
+  });
+
+  it("REGRESSION (v0.0.13): SessionStart/SessionEnd matcher is NOT 'eleanor4devs' — that matched no session source so the hook never fired", () => {
+    const entries = buildHookEntries();
+    // The match-all matcher is the empty string; the legacy "eleanor4devs"
+    // matcher silently disabled SessionStart + SessionEnd.
+    expect(ELEANOR_HOOK_MATCHER).toBe("");
+    for (const event of ["SessionStart", "SessionEnd"] as const) {
+      const m = entries[event]![0]!.matcher;
+      expect(m).not.toBe("eleanor4devs");
+      expect(m === "" || m === "*").toBe(true);
     }
   });
 

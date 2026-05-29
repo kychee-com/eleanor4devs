@@ -99,17 +99,20 @@ export async function main(argv: string[]): Promise<number> {
         backendUrl,
         stdinJson,
         statePath: STATE_PATH,
+        credentialsPath: CREDENTIALS_PATH,
+        auditLogPath: DEFAULT_AUDIT_LOG_PATH,
       });
-      if (!result.ok) {
+      // DD-48: surface the visible line on SessionStart (whose stdout the
+      // user sees in-session) — "✓ registered" / "⚠ not registered" / the
+      // not-linked guidance. Goes to stdout, not stderr.
+      if (result.userMessage) {
         // eslint-disable-next-line no-console
-        console.error(
-          `eleanor4devs hook ${parsed.hookName}: ${result.reason ?? "failed"}`,
-        );
+        console.log(result.userMessage);
       }
-      // Failure semantics mirror hook_lifecycle.py:
-      //   - after_create failure → exit 1 (FATAL — aborts dispatch)
-      //   - all others           → exit 0 (TOLERATED — logged, run continues)
-      return !result.ok && result.fatal ? 1 : 0;
+      // DD-44: local reporting hooks are best-effort — NEVER fail the
+      // user's Claude Code session. Always exit 0. Failures are surfaced
+      // via userMessage (SessionStart) + the local audit log.
+      return 0;
     }
     case "install-skills": {
       if (rest.includes("--how-to")) {

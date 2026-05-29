@@ -51,20 +51,34 @@ interface CapturedPost {
 
 function makeFakeFetch(captured: CapturedPost[]): typeof globalThis.fetch {
   return (async (input: unknown, init?: RequestInit) => {
-    captured.push({ url: String(input), init });
-    return new Response("{}", { status: 200 });
+    const url = String(input);
+    captured.push({ url, init });
+    if (url.endsWith("/auth/refresh")) {
+      return new Response(JSON.stringify({ access_token: "at-test" }), {
+        status: 200,
+      });
+    }
+    return new Response(JSON.stringify({ registered: true }), { status: 200 });
   }) as typeof globalThis.fetch;
 }
 
+/** Write a linked credential so the ON path proceeds past the link check. */
+function writeCredential(credPath: string): void {
+  mkdirSync(dirname(credPath), { recursive: true });
+  writeFileSync(credPath, JSON.stringify({ refresh_token: "rt-test" }), "utf-8");
+}
+
 describe("runHook — state-gate (Phase 19, Group D)", () => {
-  it("with state ON, performs the POST", async () => {
+  it("with state ON (and linked), performs the /hooks POST", async () => {
     const dir = freshTempDir();
     try {
       const statePath = join(dir, "state.json");
+      const credPath = join(dir, "auth.json");
       writeState(statePath, {
         enabled: true,
         toggled_at: "2026-05-28T15:42:00.000Z",
       });
+      writeCredential(credPath);
       const captured: CapturedPost[] = [];
       const result = await runHook({
         hookName: "after_create",
@@ -72,9 +86,11 @@ describe("runHook — state-gate (Phase 19, Group D)", () => {
         stdinJson: "{}",
         fetch: makeFakeFetch(captured),
         statePath,
+        credentialsPath: credPath,
       });
       expect(result.ok).toBe(true);
-      expect(captured).toHaveLength(1);
+      // refresh + hooks POST both happened
+      expect(captured.some((c) => c.url.endsWith("/hooks/after_create"))).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

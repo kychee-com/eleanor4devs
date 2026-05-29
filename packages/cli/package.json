@@ -1,6 +1,6 @@
 {
   "name": "@eleanor4devs/cli",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "Eleanor CLI — install MCP entry, install/list skill packs, auth, status. Run `eleanor4devs install`.",
   "repository": {
     "type": "git",

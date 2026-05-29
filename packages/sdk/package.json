@@ -1,6 +1,6 @@
 {
   "name": "@eleanor4devs/sdk",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "Canonical TypeScript SDK for Eleanor — typed entry points for MCP verbs, thread orchestration, status, auth.",
   "repository": {
     "type": "git",

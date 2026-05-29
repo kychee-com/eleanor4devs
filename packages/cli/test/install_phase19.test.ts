@@ -87,21 +87,29 @@ describe("install — slash-command file (Phase 19 Group C)", () => {
     }
   });
 
-  it("e4d.md frontmatter declares allowed-tools: Bash so the !cmd line actually executes", () => {
-    // Regression pin: without `allowed-tools: Bash(...)` Claude Code treats
-    // the `!eleanor4devs toggle` line as literal prompt text and sends it
-    // to the assistant verbatim instead of executing it on the user's
-    // machine. Caught 2026-05-28 live smoke. Narrowly scoped to the
-    // eleanor4devs binary so the slash command can't be repurposed to
-    // run arbitrary shell.
+  it("e4d.md uses an instruction the assistant can execute via the Bash tool", () => {
+    // Regression pin caught 2026-05-28 across two live smokes:
+    //   1. Without `allowed-tools: Bash(...)` the assistant has no
+    //      permission to shell out — the body just gets reflected back.
+    //   2. The `!command` bash-passthrough syntax works ONLY in
+    //      INTERACTIVE chat input, NOT inside slash command files;
+    //      a body of `!eleanor4devs toggle` arrives in the assistant's
+    //      prompt as literal text, never executes.
+    // The reliable pattern is a plain-language INSTRUCTION the
+    // assistant runs via the granted Bash tool.
     expect(E4D_SLASH_COMMAND_BODY).toContain("allowed-tools: Bash(");
-    expect(E4D_SLASH_COMMAND_BODY).toContain("eleanor4devs");
-    // The `!` bash-passthrough line must come AFTER the frontmatter
-    // close, otherwise it's part of the YAML.
+    expect(E4D_SLASH_COMMAND_BODY).toContain("eleanor4devs:*"); // narrowly scoped
+    // Body must reference the actual CLI command name + tell the
+    // assistant to use Bash, not just contain a `!` prefix.
+    expect(E4D_SLASH_COMMAND_BODY).toContain("eleanor4devs toggle");
+    expect(E4D_SLASH_COMMAND_BODY).toMatch(/Bash tool/i);
+    // The instruction must come AFTER the frontmatter close.
     const frontmatterEnd = E4D_SLASH_COMMAND_BODY.indexOf("\n---\n");
-    const bashLineStart = E4D_SLASH_COMMAND_BODY.indexOf("\n!eleanor4devs");
+    const instructionStart = E4D_SLASH_COMMAND_BODY.indexOf(
+      "eleanor4devs toggle",
+    );
     expect(frontmatterEnd).toBeGreaterThan(0);
-    expect(bashLineStart).toBeGreaterThan(frontmatterEnd);
+    expect(instructionStart).toBeGreaterThan(frontmatterEnd);
   });
 
   it("auto-creates the commands dir if it doesn't exist", async () => {

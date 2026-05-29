@@ -42,26 +42,30 @@ const ELEANOR_MCP_ENTRY = {
  * Canonical body of `~/.claude/commands/e4d.md` (Phase 19, [[DD-41]]).
  *
  * Claude Code reads slash-command markdown files from
- * `~/.claude/commands/<name>.md`. Lines beginning with `!` execute as
- * bash via the command-passthrough syntax — BUT ONLY when the
- * frontmatter declares `allowed-tools: Bash(...)`. Without that
- * declaration the `!command` line is treated as literal prompt text
- * and is sent to the assistant verbatim (caught 2026-05-28 live smoke:
- * user typed `/e4d`, "`!eleanor4devs toggle`" landed in the
- * conversation as literal text instead of executing).
+ * `~/.claude/commands/<name>.md` and sends the BODY VERBATIM as the
+ * assistant's prompt. The leading `!command` bash-passthrough syntax
+ * works in INTERACTIVE chat input, NOT inside slash command files —
+ * caught 2026-05-28 across two live smokes where `!eleanor4devs
+ * toggle` arrived in the conversation as literal text.
  *
- * `Bash(eleanor4devs:*)` narrowly scopes the permission to just the
- * eleanor4devs binary so this slash command can't be repurposed to
- * run arbitrary shell. The single source of truth for this file body
- * lives here so install + tests + future docs all reference the same
- * string.
+ * The reliable pattern is a plain-language INSTRUCTION the assistant
+ * executes via the Bash tool (granted by the `allowed-tools` line in
+ * the frontmatter). `Bash(eleanor4devs:*)` narrowly scopes the
+ * permission to just the eleanor4devs binary so this slash command
+ * can't be repurposed to run arbitrary shell.
+ *
+ * The single source of truth for this file body lives here so install
+ * + tests + future docs all reference the same string.
  */
 export const E4D_SLASH_COMMAND_BODY =
   "---\n" +
   "description: Toggle Eleanor4Devs local reporting (ON / OFF)\n" +
   "allowed-tools: Bash(eleanor4devs:*)\n" +
   "---\n" +
-  "!eleanor4devs toggle\n";
+  "Run `eleanor4devs toggle` via the Bash tool, then print ONLY the " +
+  "single stdout line it returned (either `Eleanor4Devs is now ON.` " +
+  "or `Eleanor4Devs is now OFF.`). No commentary, no explanation, no " +
+  "code block — just the raw line.\n";
 
 export interface InstallOptions {
   /** Path to the agent's MCP config (e.g., ~/.claude/mcp_servers.json). */

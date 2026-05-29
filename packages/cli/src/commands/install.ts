@@ -41,15 +41,25 @@ const ELEANOR_MCP_ENTRY = {
 /**
  * Canonical body of `~/.claude/commands/e4d.md` (Phase 19, [[DD-41]]).
  *
- * Claude Code's slash-command discovery reads markdown files from
+ * Claude Code reads slash-command markdown files from
  * `~/.claude/commands/<name>.md`. Lines beginning with `!` execute as
- * bash via Claude Code's command-passthrough syntax. The single source
- * of truth for this file body lives here so install + tests + future
- * docs all reference the same string.
+ * bash via the command-passthrough syntax — BUT ONLY when the
+ * frontmatter declares `allowed-tools: Bash(...)`. Without that
+ * declaration the `!command` line is treated as literal prompt text
+ * and is sent to the assistant verbatim (caught 2026-05-28 live smoke:
+ * user typed `/e4d`, "`!eleanor4devs toggle`" landed in the
+ * conversation as literal text instead of executing).
+ *
+ * `Bash(eleanor4devs:*)` narrowly scopes the permission to just the
+ * eleanor4devs binary so this slash command can't be repurposed to
+ * run arbitrary shell. The single source of truth for this file body
+ * lives here so install + tests + future docs all reference the same
+ * string.
  */
 export const E4D_SLASH_COMMAND_BODY =
   "---\n" +
   "description: Toggle Eleanor4Devs local reporting (ON / OFF)\n" +
+  "allowed-tools: Bash(eleanor4devs:*)\n" +
   "---\n" +
   "!eleanor4devs toggle\n";
 

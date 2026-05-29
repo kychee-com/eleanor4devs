@@ -87,6 +87,23 @@ describe("install — slash-command file (Phase 19 Group C)", () => {
     }
   });
 
+  it("e4d.md frontmatter declares allowed-tools: Bash so the !cmd line actually executes", () => {
+    // Regression pin: without `allowed-tools: Bash(...)` Claude Code treats
+    // the `!eleanor4devs toggle` line as literal prompt text and sends it
+    // to the assistant verbatim instead of executing it on the user's
+    // machine. Caught 2026-05-28 live smoke. Narrowly scoped to the
+    // eleanor4devs binary so the slash command can't be repurposed to
+    // run arbitrary shell.
+    expect(E4D_SLASH_COMMAND_BODY).toContain("allowed-tools: Bash(");
+    expect(E4D_SLASH_COMMAND_BODY).toContain("eleanor4devs");
+    // The `!` bash-passthrough line must come AFTER the frontmatter
+    // close, otherwise it's part of the YAML.
+    const frontmatterEnd = E4D_SLASH_COMMAND_BODY.indexOf("\n---\n");
+    const bashLineStart = E4D_SLASH_COMMAND_BODY.indexOf("\n!eleanor4devs");
+    expect(frontmatterEnd).toBeGreaterThan(0);
+    expect(bashLineStart).toBeGreaterThan(frontmatterEnd);
+  });
+
   it("auto-creates the commands dir if it doesn't exist", async () => {
     const home = freshHome();
     try {

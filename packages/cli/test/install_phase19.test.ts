@@ -23,7 +23,10 @@ import { fileURLToPath } from "node:url";
 
 import { install } from "../src/commands/install.js";
 import { ALWAYS_APPLY } from "../src/commands/install_skills.js";
-import { E4D_SLASH_COMMAND_BODY } from "../src/commands/install.js";
+import {
+  E4D_SLASH_COMMAND_BODY,
+  E4D_STATUS_SLASH_COMMAND_BODY,
+} from "../src/commands/install.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PACKAGED_SKILLS = join(HERE, "..", "skills", "eleanor4devs");
@@ -127,6 +130,30 @@ describe("install — slash-command file (Phase 19 Group C)", () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("install — /e4d-status slash command (Phase 21)", () => {
+  it("writes ~/.claude/commands/e4d-status.md with the read-only status body", async () => {
+    const home = freshHome();
+    try {
+      const p = paths(home);
+      await install({ ...p, skillsSourceDir: PACKAGED_SKILLS, review: ALWAYS_APPLY });
+      const cmdPath = join(p.commandsDir, "e4d-status.md");
+      expect(existsSync(cmdPath)).toBe(true);
+      expect(readFileSync(cmdPath, "utf-8")).toBe(E4D_STATUS_SLASH_COMMAND_BODY);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("e4d-status runs `eleanor4devs status` via Bash and NEVER toggles", () => {
+    expect(E4D_STATUS_SLASH_COMMAND_BODY).toContain("allowed-tools: Bash(");
+    expect(E4D_STATUS_SLASH_COMMAND_BODY).toContain("eleanor4devs:*");
+    expect(E4D_STATUS_SLASH_COMMAND_BODY).toContain("eleanor4devs status");
+    expect(E4D_STATUS_SLASH_COMMAND_BODY).toMatch(/Bash tool/i);
+    // Read-only: must NOT instruct a state change.
+    expect(E4D_STATUS_SLASH_COMMAND_BODY).not.toContain("eleanor4devs toggle");
   });
 });
 

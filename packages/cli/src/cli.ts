@@ -169,6 +169,8 @@ export async function main(argv: string[]): Promise<number> {
     case "status": {
       return runStatus({
         statePath: STATE_PATH,
+        backendUrl: process.env.ELEANOR4DEVS_API_BASE ?? DEFAULT_API_BASE,
+        credentialsPath: CREDENTIALS_PATH,
         // eslint-disable-next-line no-console
         log: (text: string) => console.log(text),
       });

@@ -67,6 +67,23 @@ export const E4D_SLASH_COMMAND_BODY =
   "or `Eleanor4Devs is now OFF.`). No commentary, no explanation, no " +
   "code block — just the raw line.\n";
 
+/**
+ * Canonical body of `~/.claude/commands/e4d-status.md` (Phase 21).
+ *
+ * Read-only counterpart to `/e4d`: it runs `eleanor4devs status` (which
+ * NEVER changes state) and surfaces the reporting line + recent-sessions
+ * table. Same proven Bash-tool-instruction pattern + narrowly-scoped
+ * `allowed-tools` as `e4d.md`.
+ */
+export const E4D_STATUS_SLASH_COMMAND_BODY =
+  "---\n" +
+  "description: Show Eleanor4Devs status — reporting state + recent sessions (read-only)\n" +
+  "allowed-tools: Bash(eleanor4devs:*)\n" +
+  "---\n" +
+  "Run `eleanor4devs status` via the Bash tool and print its full output " +
+  "verbatim (the reporting-state line followed by the recent-sessions " +
+  "table). This is READ-ONLY — do NOT toggle or change any state.\n";
+
 export interface InstallOptions {
   /** Path to the agent's MCP config (e.g., ~/.claude/mcp_servers.json). */
   mcpConfigPath: string;
@@ -131,8 +148,12 @@ export async function install(options: InstallOptions): Promise<InstallResult> {
  */
 function writeSlashCommand(commandsDir: string): void {
   mkdirSync(commandsDir, { recursive: true });
-  const path = join(commandsDir, "e4d.md");
-  writeFileSync(path, E4D_SLASH_COMMAND_BODY, "utf-8");
+  writeFileSync(join(commandsDir, "e4d.md"), E4D_SLASH_COMMAND_BODY, "utf-8");
+  writeFileSync(
+    join(commandsDir, "e4d-status.md"),
+    E4D_STATUS_SLASH_COMMAND_BODY,
+    "utf-8",
+  );
 }
 
 /**

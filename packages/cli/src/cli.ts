@@ -8,8 +8,8 @@
  *   eleanor4devs install-skills [--core|--how-to]
  *   eleanor4devs skills list
  *   eleanor4devs auth                             (Task 9)
- *   eleanor4devs on / off / toggle                (Phase 19)
- *   eleanor4devs status                           (Phase 19)
+ *   eleanor4devs toggle --session <id>            (Phase 23 — per-session)
+ *   eleanor4devs status                           (Phase 19/21)
  *
  * Spec: docs/products/eleanor4devs/eleanor4devs-spec.md § CLI.
  */
@@ -26,9 +26,10 @@ import {
 import { listSkills } from "./commands/skills_list.js";
 import { authFlow, parseAuthArgs, TestModeNotEnabledError } from "./commands/auth.js";
 import { parseHookArgs, readStdin, runHook } from "./commands/hook.js";
-import { runOn, runOff, runToggle } from "./commands/toggle.js";
+import { runToggle } from "./commands/toggle.js";
 import { runStatus } from "./commands/status.js";
 import { DEFAULT_AUDIT_LOG_PATH } from "./audit.js";
+import { maybePrintMigrationWarning } from "./migration_warning.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // In dev tsc emits to dist/, so the bundled skills live one level up.
@@ -142,31 +143,36 @@ export async function main(argv: string[]): Promise<number> {
       console.log(`installed: ${result.installed.length} skill(s).`);
       return 0;
     }
-    case "on": {
-      return runOn({
-        statePath: STATE_PATH,
-        auditLogPath: DEFAULT_AUDIT_LOG_PATH,
-        // eslint-disable-next-line no-console
-        log: (text: string) => console.log(text),
-      });
-    }
-    case "off": {
-      return runOff({
-        statePath: STATE_PATH,
-        auditLogPath: DEFAULT_AUDIT_LOG_PATH,
-        // eslint-disable-next-line no-console
-        log: (text: string) => console.log(text),
-      });
-    }
     case "toggle": {
+      // v0.14.0+: `toggle` requires `--session <id>` — there is no
+      // machine-wide reporting state anymore. The `/e4d` slash command
+      // body invokes us as `toggle --session ${CLAUDE_SESSION_ID}`.
+      // (The pre-v0.14.0 `on`/`off`/global-toggle verbs are removed.)
+      // Surface the first-run UX warning if the user is migrating from
+      // a pre-v0.14.0 (v1) state file.
+      maybePrintMigrationWarning({ statePath: STATE_PATH });
+      const sessionIdx = rest.indexOf("--session");
+      if (sessionIdx === -1 || rest[sessionIdx + 1] === undefined) {
+        // eslint-disable-next-line no-console
+        console.error(
+          "eleanor4devs toggle: --session <id> is required. " +
+            "Invoke via the `/e4d` slash command — never type this directly.",
+        );
+        return 1;
+      }
+      const sessionId = rest[sessionIdx + 1] as string;
       return runToggle({
+        sessionId,
         statePath: STATE_PATH,
         auditLogPath: DEFAULT_AUDIT_LOG_PATH,
+        credentialsPath: CREDENTIALS_PATH,
+        backendUrl: process.env.ELEANOR4DEVS_API_BASE ?? DEFAULT_API_BASE,
         // eslint-disable-next-line no-console
         log: (text: string) => console.log(text),
       });
     }
     case "status": {
+      maybePrintMigrationWarning({ statePath: STATE_PATH });
       return runStatus({
         statePath: STATE_PATH,
         backendUrl: process.env.ELEANOR4DEVS_API_BASE ?? DEFAULT_API_BASE,
@@ -251,10 +257,12 @@ function printHelp(): void {
       "  eleanor4devs install              install MCP entry + Core Skills Pack + hook templates",
       "  eleanor4devs install-skills       install Core Skills Pack only",
       "  eleanor4devs skills list          list installed skills",
-      "  eleanor4devs on                   enable local reporting (Local Reporting Control)",
-      "  eleanor4devs off                  disable local reporting (Local Reporting Control)",
-      "  eleanor4devs toggle               flip local reporting state (invoked by /e4d)",
-      "  eleanor4devs status               show current reporting state + last-toggle time",
+      "  eleanor4devs toggle --session <id>",
+      "                                    flip per-session reporting state",
+      "                                    (invoked by /e4d in a Claude Code session;",
+      "                                    don't run directly — the slash command",
+      "                                    provides the session id from ${CLAUDE_SESSION_ID})",
+      "  eleanor4devs status               show linked state + recent-sessions table",
       "  eleanor4devs auth                 link this CLI to your Telegram account",
       "  eleanor4devs auth --test-mode <code>",
       "                                    one-shot test-mode bypass (Red Team",

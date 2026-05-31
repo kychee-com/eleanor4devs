@@ -39,14 +39,17 @@ const ELEANOR_MCP_ENTRY = {
 };
 
 /**
- * Canonical body of `~/.claude/commands/e4d.md` (Phase 19, [[DD-41]]).
+ * Canonical body of `~/.claude/commands/e4d.md` (Phase 23, [[DD-54]]).
  *
  * Claude Code reads slash-command markdown files from
  * `~/.claude/commands/<name>.md` and sends the BODY VERBATIM as the
- * assistant's prompt. The leading `!command` bash-passthrough syntax
- * works in INTERACTIVE chat input, NOT inside slash command files —
- * caught 2026-05-28 across two live smokes where `!eleanor4devs
- * toggle` arrived in the conversation as literal text.
+ * assistant's prompt — with Claude-Code-level substitution of
+ * `${CLAUDE_SESSION_ID}` to the current session's UUID at file-load
+ * time (confirmed live via SPIKE A1 on 2026-05-31). The leading
+ * `!command` bash-passthrough syntax works in INTERACTIVE chat input,
+ * NOT inside slash command files — caught 2026-05-28 across two live
+ * smokes where `!eleanor4devs toggle` arrived in the conversation as
+ * literal text.
  *
  * The reliable pattern is a plain-language INSTRUCTION the assistant
  * executes via the Bash tool (granted by the `allowed-tools` line in
@@ -54,17 +57,24 @@ const ELEANOR_MCP_ENTRY = {
  * permission to just the eleanor4devs binary so this slash command
  * can't be repurposed to run arbitrary shell.
  *
+ * The `--session ${CLAUDE_SESSION_ID}` flag is the Phase 23 per-session
+ * mechanism: each session toggles independently, replacing the pre-
+ * v0.14.0 machine-wide on/off that caused cross-session interference.
+ *
  * The single source of truth for this file body lives here so install
  * + tests + future docs all reference the same string.
  */
 export const E4D_SLASH_COMMAND_BODY =
   "---\n" +
-  "description: Toggle Eleanor4Devs local reporting (ON / OFF)\n" +
+  "description: Toggle Eleanor4Devs reporting for THIS session (ON / OFF)\n" +
   "allowed-tools: Bash(eleanor4devs:*)\n" +
   "---\n" +
-  "Run `eleanor4devs toggle` via the Bash tool, then print ONLY the " +
-  "single stdout line it returned (either `Eleanor4Devs is now ON.` " +
-  "or `Eleanor4Devs is now OFF.`). No commentary, no explanation, no " +
+  "Run `eleanor4devs toggle --session ${CLAUDE_SESSION_ID}` via the Bash " +
+  "tool, then print ONLY the single stdout line it returned (either " +
+  "`Eleanor4Devs is now ON for this session.` or `Eleanor4Devs is now OFF " +
+  "for this session.`, possibly with a trailing parenthetical from the " +
+  "backend such as `(✓ registered)` or `(not linked — run \\`eleanor4devs " +
+  "auth\\`)` — include it verbatim). No commentary, no explanation, no " +
   "code block — just the raw line.\n";
 
 /**
@@ -157,15 +167,17 @@ function writeSlashCommand(commandsDir: string): void {
 }
 
 /**
- * If `statePath` does not exist, create it with the OFF default
- * `{enabled: false, toggled_at: null}` and return true. If it already
- * exists — corrupt or well-formed — leave it untouched and return
- * false. Rationale (per Phase 19 Group C task 2):
- *   - Overwriting a toggled-ON file would silently re-disable a user
- *     who opted in. Privacy-correct default is to preserve user state.
+ * If `statePath` does not exist, create it with the empty v2 per-session
+ * map `{version: 2, sessions: {}}` and return true. If it already exists —
+ * corrupt or well-formed (v1 or v2) — leave it untouched and return false.
+ * Rationale (Phase 23 [[DD-53]]):
+ *   - Overwriting an existing v2 file would silently un-opt every session
+ *     the user has currently opted in. Privacy-correct default is to
+ *     preserve user state.
+ *   - Overwriting a v1 file is the migration's job — `setSessionReporting`
+ *     replaces it on the first write. Install does not pre-migrate.
  *   - Overwriting a corrupt file would erase forensic evidence; the
- *     fail-closed reader treats corrupt-as-OFF anyway, so the user is
- *     no worse off (still OFF) but the corruption can be diagnosed.
+ *     fail-closed reader treats corrupt-as-OFF anyway.
  */
 function initializeStateFile(statePath: string): boolean {
   if (existsSync(statePath)) {
@@ -173,7 +185,7 @@ function initializeStateFile(statePath: string): boolean {
   }
   mkdirSync(dirname(statePath), { recursive: true });
   const body =
-    JSON.stringify({ enabled: false, toggled_at: null }, null, 2) + "\n";
+    JSON.stringify({ version: 2, sessions: {} }, null, 2) + "\n";
   writeFileSync(statePath, body, "utf-8");
   return true;
 }

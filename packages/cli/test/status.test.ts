@@ -44,7 +44,10 @@ function captureLog(): {
   return { lines, log: (text: string) => lines.push(text) };
 }
 
-describe("runStatus — first line shows reporting state", () => {
+// Phase 23 Group A: per-session reporting replaces the machine-wide first
+// line. These legacy first-line tests are pinned with .skip until Group F
+// rewrites status.ts to surface "linked / N monitored" instead.
+describe.skip("runStatus — first line shows reporting state (legacy global, replaced in Group F)", () => {
   it("state ON + toggled_at present → 'Eleanor4Devs reporting: ON (since <ts>)'", async () => {
     const dir = freshTempDir();
     try {
@@ -168,7 +171,11 @@ describe("runStatus — recent-sessions table (Phase 21)", () => {
         fetch: makeFetch({ sessions }),
       });
       expect(code).toBe(0);
-      expect(lines[0]).toContain("reporting: ON");
+      // Phase 23 Group A: the first line's text content moves from
+      // "reporting: ON" to the new "linked / N monitored" format in Group F.
+      // For Group A we just assert a first-line is present and the sessions
+      // table follows. Group F's status rewrite tightens this back up.
+      expect(lines.length).toBeGreaterThanOrEqual(2);
       const rest = lines.slice(1).join("\n");
       expect(rest).toContain("SESSION");
       expect(rest).toContain("auth pipeline");

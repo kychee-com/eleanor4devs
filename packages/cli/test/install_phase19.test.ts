@@ -158,7 +158,9 @@ describe("install — /e4d-status slash command (Phase 21)", () => {
 });
 
 describe("install — state.json initialization (Phase 19 Group C)", () => {
-  it("initializes state.json to {enabled: false, toggled_at: null} on a fresh install", async () => {
+  // Phase 23 Group A: the v1 init shape is replaced with the v2 empty
+  // per-session map. See install_phase23.test.ts for the new init contract.
+  it.skip("initializes state.json to {enabled: false, toggled_at: null} on a fresh install", async () => {
     const home = freshHome();
     try {
       const p = paths(home);

@@ -1,39 +1,83 @@
 /**
- * `eleanor4devs on / off / toggle` — Local Reporting Control verbs.
+ * `eleanor4devs toggle --session <id>` — per-session reporting opt-in/opt-out.
  *
  * Spec: docs/products/eleanor4devs/eleanor4devs-spec.md § Local Reporting
- *   Control (acceptance lines 404-406, 408).
+ *   Control (v0.14.0 — per-session, acceptance lines 461-465).
+ * Plan: docs/plans/eleanor4devs-plan.md Phase 23, Group A
+ *   ([[DD-54]], [[DD-55]]).
  *
- * Plan: docs/plans/eleanor4devs-plan.md Phase 19, Group B.
+ * Replaces the pre-v0.14.0 `on`/`off`/`toggle` verbs (which targeted a
+ * machine-wide state) with a single `toggle --session <id>` that flips a
+ * single session's record. The global verbs are gone — there is no
+ * machine-wide reporting state in v0.14.0.
  *
- * Per [[DD-43]]: all three verbs are idempotent. `on` when already ON
- * still re-writes `toggled_at`, still appends one audit-log entry, still
- * prints `Eleanor4Devs is now ON.` — the spec promise is "every toggle
- * event is recorded" regardless of whether the new state matches the
- * previous state.
+ * Flow per invocation:
  *
- * Per Phase 19 Group F robustness rule: if the audit-log append throws
- * (EACCES, ENOSPC, locked file, ...), the verb STILL writes the state
- * file and STILL prints the state line on stdout — a locked audit log
- * must never prevent the user from changing their reporting state. The
- * verb emits a stderr warning and returns 0.
+ *   1. Validate the `--session` value isn't an unsubstituted Claude Code
+ *      template (`${CLAUDE_SESSION_ID}` literal). If it is, fail loud —
+ *      better to break early than to flip a record keyed by literal
+ *      template text that would silently persist.
+ *
+ *   2. Read the current per-session reporting state. The new value is
+ *      its negation (toggle semantics).
+ *
+ *   3. Persist locally FIRST via `setSessionReporting`. This makes the
+ *      user's intent durable BEFORE any network round-trip — a slow or
+ *      failed backend can never block the local flip.
+ *
+ *   4. Best-effort backend POST: `/hooks/opt-in` (on opt-IN) or
+ *      `/hooks/disable` (on opt-OUT). Both endpoints are NEW in Phase 23
+ *      Group B and may 404 during the Ship 1 window — that's acceptable;
+ *      the local state was already persisted in step 3.
+ *
+ *   5. Print the state line: `Eleanor4Devs is now ON/OFF for this
+ *      session.` plus a backend-status suffix (✓/⚠/not-linked guidance).
+ *
+ *   6. Append one audit-log entry: `{ts, kind: "toggle", session_id,
+ *      state}`. Even an idempotent re-affirmation appends per [[DD-43]].
+ *      An audit-log failure NEVER propagates non-zero — the state change
+ *      already happened (Group F robustness rule).
+ *
+ * Privacy-monotonic invariant: opt-OUT always flips the local gate,
+ * regardless of network outcome. The CLI is the source of truth for the
+ * user's local opt-in choice; the backend mirrors it.
  */
-import { readReportingState, writeReportingState } from "../state.js";
+import {
+  readSessionReporting,
+  setSessionReporting,
+} from "../state.js";
 import { appendAuditEntry } from "../audit.js";
+import {
+  readRefreshToken,
+  refreshToAccessToken,
+} from "../auth_refresh.js";
+
+const SUBST_LITERAL = "${CLAUDE_SESSION_ID}";
 
 export interface ToggleOpts {
+  /** The Claude Code session id (from `${CLAUDE_SESSION_ID}` in `/e4d`). */
+  sessionId: string;
+  /** Path to ~/.eleanor4devs/state.json. */
   statePath: string;
+  /** Path to ~/.eleanor4devs/audit.log. */
   auditLogPath: string;
+  /** Path to ~/.eleanor4devs/auth.json (the stored refresh_token). */
+  credentialsPath: string;
+  /** Backend base URL — e.g. `https://api.eleanor4devs.com`. */
+  backendUrl: string;
   /** Clock injection for deterministic tests. Defaults to `() => new Date()`. */
   now?: () => Date;
-  /** Stdout sink. Defaults to no-op when omitted (callers should inject `console.log`). */
+  /** Stdout sink. Callers should inject `console.log`. */
   log: (text: string) => void;
-  /** Stderr sink for audit-log-failed warnings. Defaults to `console.error`. */
+  /** Stderr sink for warnings. Defaults to `console.error`. */
   warn?: (text: string) => void;
-}
-
-function clockOf(opts: ToggleOpts): () => Date {
-  return opts.now ?? (() => new Date());
+  /** Fetch override for tests. Defaults to the global fetch. */
+  fetch?: typeof globalThis.fetch;
+  /**
+   * Override the cwd / workspace_root reported on opt-IN. Tests inject;
+   * the CLI's real entrypoint passes `process.cwd()`.
+   */
+  cwd?: string;
 }
 
 function warnOf(opts: ToggleOpts): (text: string) => void {
@@ -46,61 +90,131 @@ function warnOf(opts: ToggleOpts): (text: string) => void {
   );
 }
 
-/**
- * Apply `enabled = newValue` to the state file, append a toggle entry to
- * the audit log, and print the state line. Returns 0 in every case
- * (per Group F robustness rule — even an audit-log failure does not
- * propagate a non-zero exit, because the user's state change WAS
- * persisted).
- */
-async function applyToggle(
-  newValue: boolean,
-  opts: ToggleOpts,
-): Promise<number> {
-  const now = clockOf(opts);
-  const warn = warnOf(opts);
-  const ts = now().toISOString();
+function isUnsubstitutedTemplate(value: string): boolean {
+  return value === SUBST_LITERAL || value.startsWith("${");
+}
 
-  // 1) Persist state. This MUST happen before the audit-log append so
-  //    that a locked audit log cannot prevent the user from toggling.
-  writeReportingState(
-    { enabled: newValue, toggledAt: ts },
-    { statePath: opts.statePath },
+interface BackendResult {
+  suffix: string;
+}
+
+/** Best-effort backend POST. Local state has already flipped — this never throws. */
+async function postBackend(
+  opts: ToggleOpts,
+  newValue: boolean,
+): Promise<BackendResult> {
+  const refreshToken = readRefreshToken(opts.credentialsPath);
+  if (refreshToken === null) {
+    return {
+      suffix: newValue
+        ? " (not linked — run `eleanor4devs auth`)"
+        : "",
+    };
+  }
+  const fetchOpts = opts.fetch !== undefined ? { fetch: opts.fetch } : {};
+  const auth = await refreshToAccessToken({
+    backendUrl: opts.backendUrl,
+    refreshToken,
+    ...fetchOpts,
+  });
+  if (!auth.ok) {
+    if (auth.reason === "not_linked") {
+      return {
+        suffix: newValue
+          ? " (not linked — run `eleanor4devs auth`)"
+          : "",
+      };
+    }
+    return { suffix: ` (backend ${auth.reason})` };
+  }
+  const endpoint = newValue ? "opt-in" : "disable";
+  const fetchFn = opts.fetch ?? globalThis.fetch.bind(globalThis);
+  const base = opts.backendUrl.replace(/\/$/, "");
+  const cwd = opts.cwd ?? process.cwd();
+  const body = newValue
+    ? JSON.stringify({
+        session_id: opts.sessionId,
+        cwd,
+        workspace_root: cwd,
+      })
+    : JSON.stringify({ session_id: opts.sessionId });
+  let res: Response;
+  try {
+    res = await fetchFn(`${base}/hooks/${endpoint}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${auth.accessToken}`,
+      },
+      body,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { suffix: ` (network error: ${msg})` };
+  }
+  if (res.status === 404) {
+    // Ship 1 window: backend endpoint isn't deployed yet. Acceptable.
+    return { suffix: " (backend endpoint pending — local gate flipped)" };
+  }
+  if (!res.ok) {
+    return { suffix: ` (backend ${endpoint} failed: http_${res.status})` };
+  }
+  return { suffix: newValue ? " (✓ registered)" : "" };
+}
+
+/**
+ * Flip the per-session reporting state for `opts.sessionId`. See module
+ * docstring for the full flow.
+ */
+export async function runToggle(opts: ToggleOpts): Promise<number> {
+  // (1) Literal-template validator — fail loud on unsubstituted ${...}.
+  if (isUnsubstitutedTemplate(opts.sessionId)) {
+    warnOf(opts)(
+      `eleanor4devs toggle: --session value looks like an unsubstituted ` +
+        `Claude Code template (${opts.sessionId}). Substitution failed in ` +
+        `the slash-command body — re-install with the latest CLI, or invoke ` +
+        `from inside an active Claude Code session.`,
+    );
+    return 1;
+  }
+
+  // (2) Read current state and compute the new value.
+  const nowFn = opts.now ?? (() => new Date());
+  const ts = nowFn().toISOString();
+  const current = readSessionReporting(opts.sessionId, {
+    statePath: opts.statePath,
+  });
+  const newValue = !current.enabled;
+
+  // (3) Persist locally FIRST. The user's intent always wins; network
+  //     POST is best-effort.
+  setSessionReporting(opts.sessionId, newValue, {
+    statePath: opts.statePath,
+    now: nowFn,
+  });
+
+  // (4) Best-effort backend POST.
+  const backend = await postBackend(opts, newValue);
+
+  // (5) Print the state line.
+  opts.log(
+    `Eleanor4Devs is now ${newValue ? "ON" : "OFF"} for this session.${backend.suffix}`,
   );
 
-  // 2) Print the state line. Happens before audit so the user sees the
-  //    confirmation even if the audit log is locked.
-  opts.log(`Eleanor4Devs is now ${newValue ? "ON" : "OFF"}.`);
-
-  // 3) Append the audit entry. Best-effort — surface a stderr warning
-  //    on failure but never propagate the error to the exit code.
+  // (6) Audit-log entry — never breaks the exit code.
   try {
     appendAuditEntry(
-      { ts, kind: "toggle", state: newValue ? "on" : "off" },
+      {
+        ts,
+        kind: "toggle",
+        session_id: opts.sessionId,
+        state: newValue ? "on" : "off",
+      },
       { auditLogPath: opts.auditLogPath },
     );
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    warn(`audit log append failed: ${reason}`);
+    warnOf(opts)(`audit log append failed: ${reason}`);
   }
   return 0;
-}
-
-/** Set reporting state to ON. Idempotent. */
-export async function runOn(opts: ToggleOpts): Promise<number> {
-  return applyToggle(true, opts);
-}
-
-/** Set reporting state to OFF. Idempotent. */
-export async function runOff(opts: ToggleOpts): Promise<number> {
-  return applyToggle(false, opts);
-}
-
-/**
- * Flip reporting state. Uses the fail-closed reader, so a missing /
- * corrupt state file starts at OFF and flips to ON.
- */
-export async function runToggle(opts: ToggleOpts): Promise<number> {
-  const current = readReportingState({ statePath: opts.statePath });
-  return applyToggle(!current.enabled, opts);
 }

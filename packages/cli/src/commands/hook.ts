@@ -1,55 +1,66 @@
 /**
- * `eleanor4devs hook <event>` — Claude Code reporting-hook forwarder.
+ * `eleanor4devs hook <event>` — Claude Code reporting-hook forwarder
+ * (Phase 23, Group A — per-session gate + disabled-cache local half).
  *
  * Spec: docs/products/eleanor4devs/eleanor4devs-spec.md
- *   § Claude Local Box — Auth & Reporting Pipeline.
- * Plan: docs/plans/eleanor4devs-plan.md Phase 20 Group C (DD-44/47/48) +
- *   Phase 19 Group D (the Local Reporting Control state-gate).
+ *   § Local Reporting Control (v0.14.0 — per-session, lines 461-465)
+ *   § Auth & Reporting Pipeline (lines 143-148, 397).
+ * Plan: docs/plans/eleanor4devs-plan.md Phase 23, Group A.
  *
  * The four hook entries written by `eleanor4devs install` to the user's
- * `~/.claude/settings.json` shell out to this binary. Flow per invocation:
+ * `~/.claude/settings.json` shell out to this binary on every lifecycle
+ * event. Flow per invocation:
  *
- *   1. State-gate (Phase 19): if reporting is OFF (or the state file is
- *      missing/corrupt → fail-closed OFF), return immediately — NO network,
- *      NO stdout, NO audit write.
- *   2. Credential (Phase 20 DD-47): read `~/.eleanor4devs/auth.json`. If
- *      absent, reporting is ON but the machine isn't linked → surface the
- *      not-linked guidance (on SessionStart) and return. NO /hooks POST.
- *   3. Auth: exchange the refresh_token for a short-lived access_token via
- *      `POST <backend>/auth/refresh` (no caching for MVP). A 401 means the
- *      token was revoked → treat as not-linked.
- *   4. Report: `POST <backend>/hooks/<event>` with `Authorization: Bearer
- *      <access_token>` and body `{hook, payload}`.
+ *   1. Parse `session_id` from stdin payload. Missing → audit + exit 0
+ *      (the four lifecycle hooks are best-effort; spec line 397).
  *
- * Failure semantics (Phase 20 DD-44): the local reporting hooks are
- * BEST-EFFORT. NONE are fatal — a reporting/backend/auth failure never
- * blocks or aborts the user's Claude Code session. `result.fatal` is
- * retained (always false) for the caller's exit-code logic. (The
- * Symphony-pattern-#4 `after_create`-fatal semantics apply only to
- * Eleanor's backend *dispatch* lifecycle, not these passive hooks.)
+ *   2. PER-SESSION GATE (Phase 23, [[DD-53]]). Call
+ *      readSessionReporting(session_id). NOT opted in → exit 0 immediately,
+ *      with NO network call, NO stdout, NO audit write. This is the
+ *      interference fix: a session the user never opted in is observable
+ *      from the outside as "no traffic at all".
  *
- * Visible feedback (DD-48): on `after_create` (SessionStart, whose stdout
- * IS shown to the user) the caller prints `result.userMessage` — a "✓
- * registered" / "⚠ not registered" / "not linked" line. Other events stay
- * silent.
+ *   3. CREDENTIAL READ (Phase 20). Opted in but no credential → guidance
+ *      ONLY on SessionStart, never on other events; NO /hooks POST.
+ *
+ *   4. AUTH EXCHANGE. refresh_token → access_token. 401 → not-linked.
+ *
+ *   5. POST /hooks/<event> with `Authorization: Bearer <access_token>`.
+ *
+ *   6. RESPONSE HANDLING. If the backend returns
+ *      `{registered:false, reason:"disabled"}`, locally cache that session
+ *      as disabled — the next hook for the same session_id no-ops without
+ *      a round-trip. The disable-cache write is wrapped in try/catch —
+ *      a disk failure NEVER aborts the hook (spec line 397 non-fatal).
+ *
+ * Visible feedback (DD-48):
+ *   - SessionStart (after_create) on a registered opted-in session: ✓ message.
+ *   - SessionStart on an opted-in not-linked session: not-linked guidance.
+ *   - SessionStart on a NOT-opted-in session: SILENT — merely starting a
+ *     session never surfaces the not-linked prompt (spec line 143-144). The
+ *     user opts in with /e4d to trigger that prompt.
+ *
+ * Failure semantics (DD-44): all four reporting hooks are best-effort.
+ * NONE are fatal. `result.fatal` is retained (always false) for the CLI's
+ * exit-code logic.
  */
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-
 import { appendAuditEntry } from "../audit.js";
-import { readReportingState } from "../state.js";
+import {
+  readSessionReporting,
+  setSessionReporting,
+} from "../state.js";
 import {
   ELEANOR_HOOK_NAMES,
   type EleanorHookName,
 } from "./hook_templates.js";
+import {
+  DEFAULT_CREDENTIALS_PATH,
+  readRefreshToken,
+  refreshToAccessToken,
+} from "../auth_refresh.js";
 
-/** Default credential path — `~/.eleanor4devs/auth.json` (written by `eleanor4devs auth`). */
-export const DEFAULT_CREDENTIALS_PATH: string = join(
-  homedir(),
-  ".eleanor4devs",
-  "auth.json",
-);
+// Re-export so cli.ts (and any external caller) keeps a stable import path.
+export { DEFAULT_CREDENTIALS_PATH };
 
 const REGISTERED_MSG = "✓ Eleanor: session registered";
 const NOT_LINKED_MSG =
@@ -119,9 +130,9 @@ export interface RunHookOptions {
   /** Raw stdin contents. May be empty; may have a BOM or trailing CRLF on Windows. */
   stdinJson: string;
   fetch?: typeof globalThis.fetch;
-  /** Local Reporting Control state-file path (Phase 19). */
+  /** Per-session reporting state file path. */
   statePath?: string;
-  /** Credential file path (Phase 20). Defaults to DEFAULT_CREDENTIALS_PATH. */
+  /** Credential file path. Defaults to DEFAULT_CREDENTIALS_PATH. */
   credentialsPath?: string;
   /** Audit-log path for local failure records (DD-48). */
   auditLogPath?: string;
@@ -134,24 +145,6 @@ function normalizeStdin(raw: string): string {
     s = s.slice(1);
   }
   return s.trim();
-}
-
-/** Read the stored refresh_token, or null if absent/unreadable/malformed. */
-function readRefreshToken(path: string): string | null {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf-8");
-  } catch {
-    return null;
-  }
-  try {
-    const obj = JSON.parse(raw) as { refresh_token?: unknown };
-    return typeof obj.refresh_token === "string" && obj.refresh_token
-      ? obj.refresh_token
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 function auditFailure(opts: RunHookOptions, reason: string): void {
@@ -198,76 +191,87 @@ function notLinked(isStart: boolean): HookCallResult {
   };
 }
 
+/** Parse session_id out of the stdin payload. Returns null on any failure. */
+function extractSessionId(stdinJson: string): string | null {
+  const normalized = normalizeStdin(stdinJson);
+  if (normalized.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(normalized);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const sid = (parsed as Record<string, unknown>).session_id;
+  if (typeof sid !== "string" || sid.length === 0) return null;
+  return sid;
+}
+
 export async function runHook(opts: RunHookOptions): Promise<HookCallResult> {
   const isStart = opts.hookName === "after_create";
 
-  // (1) State-gate — Phase 19. Must be the first observable behavior:
-  // OFF / missing / corrupt all fail-closed to OFF and return silently.
-  const state = readReportingState(
+  // (1) Extract session_id from stdin. Missing → log + exit ok.
+  const sessionId = extractSessionId(opts.stdinJson);
+  if (sessionId === null) {
+    auditFailure(opts, "missing_session_id");
+    return { ok: true, fatal: false, reason: "missing_session_id" };
+  }
+
+  // (2) Per-session gate — Phase 23. NOT opted-in → silent no-op.
+  // Spec line 143-144: merely starting a session never surfaces the
+  // not-linked prompt — no userMessage even on SessionStart.
+  const state = readSessionReporting(
+    sessionId,
     opts.statePath !== undefined ? { statePath: opts.statePath } : {},
   );
   if (!state.enabled) {
     return { ok: true, fatal: false };
   }
 
-  // (2) Credential — Phase 20. ON but unlinked → guide, don't post.
+  // (3) Credential — opted-in but no credential → guide (only on SessionStart).
   const credPath = opts.credentialsPath ?? DEFAULT_CREDENTIALS_PATH;
   const refreshToken = readRefreshToken(credPath);
   if (refreshToken === null) {
     return notLinked(isStart);
   }
 
-  const fetchFn = opts.fetch ?? globalThis.fetch.bind(globalThis);
-  const base = opts.backendUrl.replace(/\/$/, "");
-
-  // (3) Exchange refresh_token → access_token (no caching, DD-47).
-  let accessToken: string;
-  try {
-    const res = await fetchFn(`${base}/auth/refresh`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-    if (res.status === 401) {
-      // Revoked / unknown refresh_token → re-link required.
+  // (4) Exchange refresh_token → access_token (no caching, DD-47).
+  const auth = await refreshToAccessToken({
+    backendUrl: opts.backendUrl,
+    refreshToken,
+    ...(opts.fetch !== undefined ? { fetch: opts.fetch } : {}),
+  });
+  if (!auth.ok) {
+    if (auth.reason === "not_linked") {
       return notLinked(isStart);
     }
-    if (!res.ok) {
-      return failure(opts, isStart, `auth_refresh_http_${res.status}`);
-    }
-    const json = (await res.json()) as { access_token?: unknown };
-    if (typeof json.access_token !== "string" || !json.access_token) {
-      return failure(opts, isStart, "auth_refresh_no_token");
-    }
-    accessToken = json.access_token;
-  } catch (err) {
-    return failure(opts, isStart, `network_error: ${errText(err)}`);
+    return failure(opts, isStart, auth.reason);
   }
 
-  // Parse the stdin payload (Claude Code's hook-context JSON).
+  // Parse the stdin payload to forward verbatim (Claude Code's hook context).
   const normalized = normalizeStdin(opts.stdinJson);
   let payload: unknown = {};
   let parseError: string | undefined;
-  if (normalized.length > 0) {
-    try {
-      payload = JSON.parse(normalized);
-    } catch (err) {
-      parseError = `invalid_stdin_json: ${errText(err)}`;
-    }
+  try {
+    payload = JSON.parse(normalized);
+  } catch (err) {
+    parseError = `invalid_stdin_json: ${errText(err)}`;
   }
   const body =
     parseError !== undefined
       ? JSON.stringify({ hook: opts.hookName, error: parseError })
       : JSON.stringify({ hook: opts.hookName, payload });
 
-  // (4) POST to /hooks/<event> with the bearer access_token.
+  // (5) POST /hooks/<event>.
+  const fetchFn = opts.fetch ?? globalThis.fetch.bind(globalThis);
+  const base = opts.backendUrl.replace(/\/$/, "");
   let res: Response;
   try {
     res = await fetchFn(`${base}/hooks/${opts.hookName}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${accessToken}`,
+        authorization: `Bearer ${auth.accessToken}`,
       },
       body,
     });
@@ -278,12 +282,10 @@ export async function runHook(opts: RunHookOptions): Promise<HookCallResult> {
     return failure(opts, isStart, `http_${res.status}`);
   }
   if (parseError !== undefined) {
-    // The POST landed (so the backend audit log sees the malformed event),
-    // but registration could not happen — surface it as a failure.
     return failure(opts, isStart, parseError);
   }
 
-  // Success — parse the typed {registered, reason} the backend returns.
+  // (6) Parse the typed {registered, reason} response.
   let registered = true;
   let reason: string | undefined;
   try {
@@ -301,6 +303,21 @@ export async function runHook(opts: RunHookOptions): Promise<HookCallResult> {
 
   if (!registered) {
     const why = reason ?? "not_registered";
+    // [[DD-60]] local half: backend says this session is disabled → flip
+    // the local gate so the next hook for the same session no-ops without
+    // a network round-trip. Wrap in try/catch — disk write failure must
+    // NEVER abort the hook (spec line 397).
+    if (why === "disabled") {
+      try {
+        setSessionReporting(
+          sessionId,
+          false,
+          opts.statePath !== undefined ? { statePath: opts.statePath } : {},
+        );
+      } catch (err) {
+        auditFailure(opts, `disabled_cache_write_failed: ${errText(err)}`);
+      }
+    }
     auditFailure(opts, why);
     return {
       ok: true,

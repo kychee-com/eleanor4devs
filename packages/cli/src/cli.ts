@@ -25,6 +25,7 @@ import {
 } from "./commands/install_skills.js";
 import { listSkills } from "./commands/skills_list.js";
 import { authFlow, parseAuthArgs, TestModeNotEnabledError } from "./commands/auth.js";
+import { runLogout } from "./commands/logout.js";
 import { parseHookArgs, readStdin, runHook } from "./commands/hook.js";
 import { runToggle } from "./commands/toggle.js";
 import { runStatus } from "./commands/status.js";
@@ -221,6 +222,21 @@ export async function main(argv: string[]): Promise<number> {
         throw err;
       }
     }
+    case "logout": {
+      // Revoke the stored refresh_token server-side, then clear the local
+      // credential. Idempotent + privacy-monotonic (see commands/logout.ts).
+      // ELEANOR4DEVS_CREDENTIALS_PATH override mirrors ELEANOR4DEVS_API_BASE
+      // — present for testability; production uses the real HOME path.
+      return runLogout({
+        credentialsPath:
+          process.env.ELEANOR4DEVS_CREDENTIALS_PATH ?? CREDENTIALS_PATH,
+        backendUrl: process.env.ELEANOR4DEVS_API_BASE ?? DEFAULT_API_BASE,
+        // eslint-disable-next-line no-console
+        log: (text: string) => console.log(text),
+        // eslint-disable-next-line no-console
+        errorLog: (text: string) => console.error(text),
+      });
+    }
     case "skills": {
       if (rest[0] === "list") {
         const skills = listSkills({ targetDir: SKILLS_TARGET_DIR });
@@ -264,6 +280,7 @@ function printHelp(): void {
       "                                    provides the session id from ${CLAUDE_SESSION_ID})",
       "  eleanor4devs status               show linked state + recent-sessions table",
       "  eleanor4devs auth                 link this CLI to your Telegram account",
+      "  eleanor4devs logout               revoke the stored token + clear the local credential",
       "  eleanor4devs auth --test-mode <code>",
       "                                    one-shot test-mode bypass (Red Team",
       "                                    /systemtest only; backend must run",

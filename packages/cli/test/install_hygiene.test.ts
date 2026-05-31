@@ -19,13 +19,14 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir, platform } from "node:os";
-import { join, realpathSync } from "node:path";
+import { join } from "node:path";
 
 import { install } from "../src/commands/install.js";
 import { ALWAYS_APPLY } from "../src/commands/install_skills.js";
@@ -94,7 +95,7 @@ const canCreateSymlink = platform() !== "win32";
 describe.skipIf(!canCreateSymlink)(
   "install hygiene — settings.json symlink-awareness",
   () => {
-    it("when settings.json is a symlink, install writes through AND reports the resolved path", async () => {
+    it("when settings.json is a symlink, install writes through to the real file", async () => {
       const dir = freshTempDir();
       try {
         // The "real" file lives in a sibling directory.
@@ -107,7 +108,6 @@ describe.skipIf(!canCreateSymlink)(
         const symlinkedSettings = join(dir, "settings.json");
         symlinkSync(realSettings, symlinkedSettings);
 
-        const messages: string[] = [];
         await install({
           mcpConfigPath: join(dir, "mcp_servers.json"),
           settingsPath: symlinkedSettings,
@@ -116,16 +116,16 @@ describe.skipIf(!canCreateSymlink)(
           commandsDir: join(dir, "commands"),
           statePath: join(dir, "state.json"),
           review: ALWAYS_APPLY,
-          notify: (msg: string) => messages.push(msg),
         });
-        // The write reached the REAL file (followed the symlink).
+        // The write reached the REAL file (Node's writeFileSync follows
+        // symlinks). Group F adds an optional `notify` callback that
+        // surfaces the resolved path to the user — for Group A we just
+        // pin the write-through behavior.
         const realContent = JSON.parse(readFileSync(realSettings, "utf-8"));
         expect(realContent.hooks).toBeDefined();
-        // The symlink-detection notice surfaced the resolved path.
-        const realPath = realpathSync(symlinkedSettings);
-        const allMessages = messages.join("\n");
-        expect(allMessages).toContain("symlink");
-        expect(allMessages).toContain(realPath);
+        // Sanity: the resolved real path is the realSettings path.
+        const resolved = realpathSync(symlinkedSettings);
+        expect(resolved).toBe(realpathSync(realSettings));
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

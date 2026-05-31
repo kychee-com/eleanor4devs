@@ -69,8 +69,8 @@ function writeCred(path: string, refresh: string): void {
 function makeFetch(
   routes: Record<string, (req: { url: string; init?: RequestInit }) => Response>,
 ): typeof globalThis.fetch {
-  return (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : (input as URL).toString();
+  return (async (input: string | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
     const opts = init !== undefined ? { url, init } : { url };
     for (const [pattern, handler] of Object.entries(routes)) {
       if (url.endsWith(pattern)) return handler(opts);

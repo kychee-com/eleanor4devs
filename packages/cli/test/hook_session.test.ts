@@ -60,8 +60,8 @@ function makeFetch(
   routes: Record<string, (req: { url: string; init?: RequestInit }) => Response>,
 ): { fn: typeof globalThis.fetch; calls: string[] } {
   const calls: string[] = [];
-  const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : (input as URL).toString();
+  const fn = (async (input: string | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
     calls.push(url);
     const optsArg = init !== undefined ? { url, init } : { url };
     for (const [pattern, handler] of Object.entries(routes)) {

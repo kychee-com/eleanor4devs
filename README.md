@@ -54,7 +54,7 @@ See https://eleanor4devs.com/privacy/. Short version:
 - The MCP server exposes **exactly one verb** (`report`). No file I/O, no shell exec, no arbitrary network egress.
 - Local audit log at `~/.eleanor4devs/audit.log` records every call's hashed digest. Raw payloads stay local.
 - Only **hashed payload digests** + session metadata leave the user's machine, not raw `report` contents.
-- Revoke a CLI install's backend access with `eleanor4devs auth revoke`.
+- Sign out a CLI install (revokes its backend token, then deletes the local credential) with `eleanor4devs logout`.
 
 ## Reporting issues
 

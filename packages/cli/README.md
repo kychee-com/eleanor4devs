@@ -52,7 +52,7 @@ Releases are lockstep across all 4 `@eleanor4devs/*` packages (`provider-contrac
 ## Uninstall
 
 ```bash
-eleanor4devs auth revoke && npm uninstall -g @eleanor4devs/cli
+eleanor4devs logout && npm uninstall -g @eleanor4devs/cli
 ```
 
 Revokes the backend OAuth token, then removes the CLI binary. The MCP entry in `~/.claude/mcp_servers.json` remains until you delete it manually — we don't edit a file we did not exclusively own.

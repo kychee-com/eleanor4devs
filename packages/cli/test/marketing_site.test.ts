@@ -17,12 +17,31 @@
  *     security alert; provider matrix; how to revoke access.
  *
  * Stays RED until the next Amplify deploy after this commit lands.
+ *
+ * F-009 guardrail (Phase 24): the sign-out verb is `eleanor4devs logout`
+ * (the real CLI command that POSTs /auth/revoke then deletes the local
+ * credential), NEVER `eleanor4devs auth revoke` (there is no `revoke`
+ * subcommand — the argv dispatcher treats `auth revoke` as `auth` + an
+ * ignored arg, starting a fresh link handshake and leaving the token LIVE).
+ * The OFFLINE guardrail below reads the shipped README docs from disk and
+ * forbids `auth revoke` outright — deterministic, no network, so a doc
+ * regression is caught at `npm test` rather than by the Red Team.
  */
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 const MARKETING_ORIGIN = "https://eleanor4devs.com";
 
 const SKIP_LIVE = process.env.ELEANOR4DEVS_SKIP_LIVE_NPM === "1";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const CLI_README = readFileSync(join(__dirname, "..", "README.md"), "utf-8");
+const ROOT_README = readFileSync(
+  join(__dirname, "..", "..", "..", "README.md"),
+  "utf-8",
+);
 
 async function fetchBody(path: string): Promise<string> {
   const res = await fetch(`${MARKETING_ORIGIN}${path}`);
@@ -56,10 +75,11 @@ describe.skipIf(SKIP_LIVE)("F-002 regression — marketing site content", () => 
     expect(html).not.toMatch(/packages aren['’]t live/i);
   });
 
-  it("privacy page covers no-new-vector principle + revoke", async () => {
+  it("privacy page covers no-new-vector principle + logout (F-009)", async () => {
     const html = await fetchBody("/privacy/");
     expect(html).toMatch(/no-new-vector/i);
-    expect(html).toMatch(/eleanor4devs auth revoke/);
+    expect(html).toMatch(/eleanor4devs logout/);
+    expect(html).not.toMatch(/auth revoke/);
   });
 
   it("FAQ page contains the required tap-to-call security entry", async () => {
@@ -82,9 +102,22 @@ describe.skipIf(SKIP_LIVE)("F-002 regression — marketing site content", () => 
     expect(html).toMatch(/provider/i);
   });
 
-  it("FAQ page explains how to revoke Eleanor's access", async () => {
+  it("FAQ page explains how to sign out (logout) of Eleanor (F-009)", async () => {
     const html = await fetchBody("/faq/");
-    expect(html).toMatch(/revoke/i);
-    expect(html).toMatch(/eleanor4devs auth revoke/);
+    expect(html).toMatch(/eleanor4devs logout/);
+    expect(html).not.toMatch(/auth revoke/);
   });
 });
+
+describe("F-009 offline guardrail — README sign-out verb is `logout`, not `auth revoke`", () => {
+  it("CLI README uses `eleanor4devs logout` and never `auth revoke`", () => {
+    expect(CLI_README).toMatch(/eleanor4devs logout/);
+    expect(CLI_README).not.toMatch(/auth revoke/);
+  });
+
+  it("root README uses `eleanor4devs logout` and never `auth revoke`", () => {
+    expect(ROOT_README).toMatch(/eleanor4devs logout/);
+    expect(ROOT_README).not.toMatch(/auth revoke/);
+  });
+});
+

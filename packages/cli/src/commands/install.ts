@@ -90,9 +90,12 @@ export const E4D_STATUS_SLASH_COMMAND_BODY =
   "description: Show Eleanor4Devs status — reporting state + recent sessions (read-only)\n" +
   "allowed-tools: Bash(eleanor4devs:*)\n" +
   "---\n" +
-  "Run `eleanor4devs status` via the Bash tool and print its full output " +
-  "verbatim (the reporting-state line followed by the recent-sessions " +
-  "table). This is READ-ONLY — do NOT toggle or change any state.\n";
+  "Run this command via the Bash tool and print its full output verbatim:\n" +
+  "`eleanor4devs status --session ${CLAUDE_SESSION_ID}`\n" +
+  "It prints the machine link line + monitored count, the recent-sessions " +
+  "table (all five states), and a final line stating whether THIS session " +
+  "is monitored. This is READ-ONLY — it makes no state-changing backend " +
+  "call and writes no audit entry. Do NOT toggle or change any state.\n";
 
 export interface InstallOptions {
   /** Path to the agent's MCP config (e.g., ~/.claude/mcp_servers.json). */

@@ -174,10 +174,17 @@ export async function main(argv: string[]): Promise<number> {
     }
     case "status": {
       maybePrintMigrationWarning({ statePath: STATE_PATH });
+      // Optional `--session <id>` (passed by `/e4d-status` as
+      // ${CLAUDE_SESSION_ID}) appends a read-only "this session monitored?"
+      // line. Absent for a plain `eleanor4devs status`.
+      const sIdx = rest.indexOf("--session");
+      const sessionId =
+        sIdx !== -1 && rest[sIdx + 1] !== undefined ? rest[sIdx + 1] : undefined;
       return runStatus({
         statePath: STATE_PATH,
         backendUrl: process.env.ELEANOR4DEVS_API_BASE ?? DEFAULT_API_BASE,
         credentialsPath: CREDENTIALS_PATH,
+        ...(sessionId !== undefined ? { sessionId } : {}),
         // eslint-disable-next-line no-console
         log: (text: string) => console.log(text),
       });

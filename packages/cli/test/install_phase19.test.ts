@@ -155,6 +155,15 @@ describe("install — /e4d-status slash command (Phase 21)", () => {
     // Read-only: must NOT instruct a state change.
     expect(E4D_STATUS_SLASH_COMMAND_BODY).not.toContain("eleanor4devs toggle");
   });
+
+  it("e4d-status passes the current session id + advertises read-only (Phase 23 Group F)", () => {
+    // Surfaces THIS session's reporting state via --session.
+    expect(E4D_STATUS_SLASH_COMMAND_BODY).toContain(
+      "eleanor4devs status --session ${CLAUDE_SESSION_ID}",
+    );
+    // Explicitly read-only — no state-changing backend call / audit entry.
+    expect(E4D_STATUS_SLASH_COMMAND_BODY).toMatch(/READ-ONLY/i);
+  });
 });
 
 describe("install — state.json initialization (Phase 19 Group C)", () => {

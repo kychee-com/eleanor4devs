@@ -1,122 +1,35 @@
 /**
- * Tests for `eleanor4devs status` first line (Phase 19, Group E).
+ * Tests for `eleanor4devs status` (Phase 23 Group F, spec v0.14.0).
  *
- * Spec: docs/products/eleanor4devs/eleanor4devs-spec.md § Local Reporting
- *   Control line 409 — "`eleanor4devs status` shows current state +
- *   last-toggle timestamp on the first output line".
+ * Spec: docs/products/eleanor4devs/eleanor4devs-spec.md § CLI line 209.
  *
- * Phase 19 owns line 1 only. Lines 2+ (thread counts, focus cap, etc.)
- * are reserved for later phases per the plan.
+ * Phase 23 ([[DD-52]]) replaced the machine-wide reporting ON/OFF first
+ * line with a per-session model: the first line is now a machine LINK line
+ * + a count of currently-monitored sessions (active + paused); the table
+ * renders all five states. There is no global reporting toggle anymore.
  */
 import { describe, expect, it } from "vitest";
-import {
-  mkdtempSync,
-  mkdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import { runStatus } from "../src/commands/status.js";
+import { setSessionReporting } from "../src/state.js";
 
 function freshTempDir(): string {
   return mkdtempSync(join(tmpdir(), "e4d-status-"));
 }
 
-function writeState(
-  statePath: string,
-  body: string | { enabled: boolean; toggled_at: string | null },
-): void {
-  mkdirSync(dirname(statePath), { recursive: true });
-  if (typeof body === "string") {
-    writeFileSync(statePath, body, "utf-8");
-  } else {
-    writeFileSync(statePath, JSON.stringify(body), "utf-8");
-  }
-}
-
-function captureLog(): {
-  lines: string[];
-  log: (text: string) => void;
-} {
+function captureLog(): { lines: string[]; log: (t: string) => void } {
   const lines: string[] = [];
-  return { lines, log: (text: string) => lines.push(text) };
+  return { lines, log: (t: string) => lines.push(t) };
 }
 
-// Phase 23 Group A: per-session reporting replaces the machine-wide first
-// line. These legacy first-line tests are pinned with .skip until Group F
-// rewrites status.ts to surface "linked / N monitored" instead.
-describe.skip("runStatus — first line shows reporting state (legacy global, replaced in Group F)", () => {
-  it("state ON + toggled_at present → 'Eleanor4Devs reporting: ON (since <ts>)'", async () => {
-    const dir = freshTempDir();
-    try {
-      const statePath = join(dir, "state.json");
-      writeState(statePath, {
-        enabled: true,
-        toggled_at: "2026-05-28T15:42:00Z",
-      });
-      const { lines, log } = captureLog();
-      const code = await runStatus({ statePath, log });
-      expect(code).toBe(0);
-      expect(lines[0]).toBe(
-        "Eleanor4Devs reporting: ON (since 2026-05-28T15:42:00Z)",
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("state OFF + toggled_at present → 'Eleanor4Devs reporting: OFF (since <ts>)'", async () => {
-    const dir = freshTempDir();
-    try {
-      const statePath = join(dir, "state.json");
-      writeState(statePath, {
-        enabled: false,
-        toggled_at: "2026-05-28T15:42:00Z",
-      });
-      const { lines, log } = captureLog();
-      const code = await runStatus({ statePath, log });
-      expect(code).toBe(0);
-      expect(lines[0]).toBe(
-        "Eleanor4Devs reporting: OFF (since 2026-05-28T15:42:00Z)",
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("missing state file → 'Eleanor4Devs reporting: OFF (no toggle recorded)'", async () => {
-    const dir = freshTempDir();
-    try {
-      const statePath = join(dir, "state.json");
-      const { lines, log } = captureLog();
-      const code = await runStatus({ statePath, log });
-      expect(code).toBe(0);
-      expect(lines[0]).toBe(
-        "Eleanor4Devs reporting: OFF (no toggle recorded)",
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("corrupt state file → same as missing (fail-closed)", async () => {
-    const dir = freshTempDir();
-    try {
-      const statePath = join(dir, "state.json");
-      writeState(statePath, "not json at all");
-      const { lines, log } = captureLog();
-      const code = await runStatus({ statePath, log });
-      expect(code).toBe(0);
-      expect(lines[0]).toBe(
-        "Eleanor4Devs reporting: OFF (no toggle recorded)",
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
+function writeCred(dir: string): string {
+  const p = join(dir, "auth.json");
+  writeFileSync(p, JSON.stringify({ refresh_token: "rt-x" }), "utf-8");
+  return p;
+}
 
 interface FetchOpts {
   refreshStatus?: number;
@@ -140,55 +53,110 @@ function makeFetch(o: FetchOpts): typeof globalThis.fetch {
   }) as typeof globalThis.fetch;
 }
 
-function writeCred(dir: string): string {
-  const p = join(dir, "auth.json");
-  writeFileSync(p, JSON.stringify({ refresh_token: "rt-x" }), "utf-8");
-  return p;
+function row(state: string, name: string) {
+  return {
+    thread_id: `t-${name}`,
+    display_name: name,
+    state,
+    repo: "eleanor4devs",
+    last_event_at: new Date().toISOString(),
+  };
 }
 
-describe("runStatus — recent-sessions table (Phase 21)", () => {
-  it("linked → reporting line, then the sessions table", async () => {
+describe("runStatus — link line (Phase 23 Group F)", () => {
+  it("linked → 'linked · N sessions monitored' counting active + paused", async () => {
     const dir = freshTempDir();
     try {
-      const statePath = join(dir, "state.json");
-      writeState(statePath, { enabled: true, toggled_at: "2026-05-28T15:42:00Z" });
-      const credPath = writeCred(dir);
       const sessions = [
-        {
-          thread_id: "t1",
-          display_name: "auth pipeline",
-          state: "active",
-          repo: "eleanor4devs",
-          last_event_at: new Date().toISOString(),
-        },
+        row("active", "alpha"),
+        row("paused", "beta"),
+        row("active", "gamma"),
+        row("disabled", "delta"), // retired — NOT counted
+        row("archived", "epsilon"), // retired — NOT counted
+        row("expired", "zeta"), // retired — NOT counted
       ];
       const { lines, log } = captureLog();
       const code = await runStatus({
-        statePath,
+        statePath: join(dir, "state.json"),
         log,
         backendUrl: "https://api.test",
-        credentialsPath: credPath,
+        credentialsPath: writeCred(dir),
         fetch: makeFetch({ sessions }),
       });
       expect(code).toBe(0);
-      // Phase 23 Group A: the first line's text content moves from
-      // "reporting: ON" to the new "linked / N monitored" format in Group F.
-      // For Group A we just assert a first-line is present and the sessions
-      // table follows. Group F's status rewrite tightens this back up.
-      expect(lines.length).toBeGreaterThanOrEqual(2);
-      const rest = lines.slice(1).join("\n");
-      expect(rest).toContain("SESSION");
-      expect(rest).toContain("auth pipeline");
+      expect(lines[0]).toBe("Eleanor4Devs: linked · 3 sessions monitored");
+      // No machine-wide ON/OFF anywhere.
+      expect(lines.join("\n")).not.toContain("reporting: ON");
+      expect(lines.join("\n")).not.toContain("reporting: OFF");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("unlinked → reporting line + 'run eleanor4devs auth' hint, no fetch", async () => {
+  it("exactly one monitored → singular 'session'", async () => {
     const dir = freshTempDir();
     try {
-      const statePath = join(dir, "state.json");
-      writeState(statePath, { enabled: true, toggled_at: "2026-05-28T15:42:00Z" });
+      const { lines, log } = captureLog();
+      await runStatus({
+        statePath: join(dir, "state.json"),
+        log,
+        backendUrl: "https://api.test",
+        credentialsPath: writeCred(dir),
+        fetch: makeFetch({ sessions: [row("active", "only")] }),
+      });
+      expect(lines[0]).toBe("Eleanor4Devs: linked · 1 session monitored");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("zero monitored (all retired) → 'linked · 0 sessions monitored'", async () => {
+    const dir = freshTempDir();
+    try {
+      const { lines, log } = captureLog();
+      await runStatus({
+        statePath: join(dir, "state.json"),
+        log,
+        backendUrl: "https://api.test",
+        credentialsPath: writeCred(dir),
+        fetch: makeFetch({ sessions: [row("disabled", "x"), row("expired", "y")] }),
+      });
+      expect(lines[0]).toBe("Eleanor4Devs: linked · 0 sessions monitored");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("table renders all five states", async () => {
+    const dir = freshTempDir();
+    try {
+      const sessions = [
+        row("active", "s-active"),
+        row("paused", "s-paused"),
+        row("disabled", "s-disabled"),
+        row("archived", "s-archived"),
+        row("expired", "s-expired"),
+      ];
+      const { lines, log } = captureLog();
+      await runStatus({
+        statePath: join(dir, "state.json"),
+        log,
+        backendUrl: "https://api.test",
+        credentialsPath: writeCred(dir),
+        fetch: makeFetch({ sessions }),
+      });
+      const table = lines.slice(1).join("\n");
+      for (const s of ["active", "paused", "disabled", "archived", "expired"]) {
+        expect(table).toContain(s);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("no credential → 'not linked' + auth hint, NO fetch", async () => {
+    const dir = freshTempDir();
+    try {
       let fetched = false;
       const fetchSpy = (async () => {
         fetched = true;
@@ -196,13 +164,14 @@ describe("runStatus — recent-sessions table (Phase 21)", () => {
       }) as typeof globalThis.fetch;
       const { lines, log } = captureLog();
       const code = await runStatus({
-        statePath,
+        statePath: join(dir, "state.json"),
         log,
         backendUrl: "https://api.test",
         credentialsPath: join(dir, "missing.json"),
         fetch: fetchSpy,
       });
       expect(code).toBe(0);
+      expect(lines[0]).toBe("Eleanor4Devs: not linked");
       expect(lines.join("\n")).toContain("eleanor4devs auth");
       expect(fetched).toBe(false);
     } finally {
@@ -210,22 +179,156 @@ describe("runStatus — recent-sessions table (Phase 21)", () => {
     }
   });
 
-  it("backend error → reporting line + couldn't-load note, never throws, exit 0", async () => {
+  it("stale/revoked credential (refresh 401) → 'not linked' + hint", async () => {
     const dir = freshTempDir();
     try {
-      const statePath = join(dir, "state.json");
-      writeState(statePath, { enabled: false, toggled_at: "2026-05-28T15:42:00Z" });
-      const credPath = writeCred(dir);
       const { lines, log } = captureLog();
-      const code = await runStatus({
-        statePath,
+      await runStatus({
+        statePath: join(dir, "state.json"),
         log,
         backendUrl: "https://api.test",
-        credentialsPath: credPath,
+        credentialsPath: writeCred(dir),
+        fetch: makeFetch({ refreshStatus: 401 }),
+      });
+      expect(lines[0]).toBe("Eleanor4Devs: not linked");
+      expect(lines.join("\n")).toContain("eleanor4devs auth");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("backend unreachable → 'linked' + couldn't-load note, exit 0, never throws", async () => {
+    const dir = freshTempDir();
+    try {
+      const { lines, log } = captureLog();
+      const code = await runStatus({
+        statePath: join(dir, "state.json"),
+        log,
+        backendUrl: "https://api.test",
+        credentialsPath: writeCred(dir),
         fetch: makeFetch({ boom: true }),
       });
       expect(code).toBe(0);
+      expect(lines[0]).toBe("Eleanor4Devs: linked");
       expect(lines.join("\n").toLowerCase()).toContain("couldn't load");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("runStatus — current session line (/e4d-status)", () => {
+  it("opted-in session → 'This session: monitored'", async () => {
+    const dir = freshTempDir();
+    try {
+      const statePath = join(dir, "state.json");
+      setSessionReporting("sess-1", true, { statePath });
+      const { lines, log } = captureLog();
+      await runStatus({
+        statePath,
+        log,
+        backendUrl: "https://api.test",
+        credentialsPath: writeCred(dir),
+        fetch: makeFetch({ sessions: [row("active", "x")] }),
+        sessionId: "sess-1",
+      });
+      const last = lines[lines.length - 1]!;
+      expect(last).toContain("This session: monitored");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("not-opted-in session → 'This session: not monitored' + /e4d hint", async () => {
+    const dir = freshTempDir();
+    try {
+      const { lines, log } = captureLog();
+      await runStatus({
+        statePath: join(dir, "state.json"), // no record for sess-2
+        log,
+        backendUrl: "https://api.test",
+        credentialsPath: writeCred(dir),
+        fetch: makeFetch({ sessions: [] }),
+        sessionId: "sess-2",
+      });
+      const last = lines[lines.length - 1]!;
+      expect(last).toContain("This session: not monitored");
+      expect(last).toContain("/e4d");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("no sessionId → no current-session line at all", async () => {
+    const dir = freshTempDir();
+    try {
+      const { lines, log } = captureLog();
+      await runStatus({
+        statePath: join(dir, "state.json"),
+        log,
+        backendUrl: "https://api.test",
+        credentialsPath: writeCred(dir),
+        fetch: makeFetch({ sessions: [row("active", "x")] }),
+      });
+      expect(lines.join("\n")).not.toContain("This session:");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("unsubstituted ${CLAUDE_SESSION_ID} → graceful 'unavailable' line, no crash", async () => {
+    const dir = freshTempDir();
+    try {
+      const { lines, log } = captureLog();
+      const code = await runStatus({
+        statePath: join(dir, "state.json"),
+        log,
+        backendUrl: "https://api.test",
+        credentialsPath: writeCred(dir),
+        fetch: makeFetch({ sessions: [] }),
+        sessionId: "${CLAUDE_SESSION_ID}",
+      });
+      expect(code).toBe(0);
+      expect(lines.join("\n")).toContain("reporting state unavailable");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("status flow issues ONLY GET /sessions + POST /auth/refresh — no state-mutating POST", async () => {
+    const dir = freshTempDir();
+    try {
+      const calls: Array<{ url: string; method: string }> = [];
+      const recordingFetch = (async (input: unknown, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, method: (init?.method ?? "GET").toUpperCase() });
+        if (url.endsWith("/auth/refresh")) {
+          return new Response(JSON.stringify({ access_token: "at-x" }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ sessions: [row("active", "x")] }), { status: 200 });
+      }) as typeof globalThis.fetch;
+      const statePath = join(dir, "state.json");
+      setSessionReporting("s", true, { statePath });
+      await runStatus({
+        statePath,
+        log: () => {},
+        backendUrl: "https://api.test",
+        credentialsPath: writeCred(dir),
+        fetch: recordingFetch,
+        sessionId: "s",
+      });
+      // The ONLY mutating call allowed is POST /auth/refresh (mints an
+      // access token; it does not change session/thread state). NO POST to
+      // any /hooks/* or /sessions/*/disable|archive endpoint.
+      const forbidden = calls.filter(
+        (c) =>
+          /\/hooks\/(opt-in|disable|after_create)/.test(c.url) ||
+          /\/sessions\/.*\/(disable|archive)/.test(c.url),
+      );
+      expect(forbidden).toEqual([]);
+      // The sessions listing must be a GET.
+      const sessionsCalls = calls.filter((c) => /\/sessions\?/.test(c.url));
+      expect(sessionsCalls.every((c) => c.method === "GET")).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

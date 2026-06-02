@@ -4,11 +4,11 @@
  * 1. Writes the MCP server entry into `~/.claude/mcp_servers.json`
  *    (merging — never clobbering — any existing entries from other
  *    agents).
- * 2. Writes the 4 Claude Code hook entries (after_create / before_run /
- *    after_run / before_remove) into `~/.claude/settings.json` under
- *    the `hooks` key (Phase 8 — Claude Local Box). Other agents' hooks
- *    are preserved; an existing eleanor4devs entry is replaced in place
- *    so re-runs are idempotent.
+ * 2. PRUNES any stale eleanor4devs hook entries from `~/.claude/settings.json`
+ *    (Phase 26, [[DD-69]]) and registers NO hooks. The four lifecycle hooks
+ *    are registered lazily by the first `/e4d` opt-in (see hook_registry.ts);
+ *    a never-opted-in machine carries zero eleanor4devs hooks. Other agents'
+ *    hook entries are preserved untouched.
  * 3. Installs the Core Skills Pack via `installSkills` (which honors
  *    the skill-review-before-apply contract).
  */
@@ -24,11 +24,7 @@ import {
   installSkills,
   type SkillReview,
 } from "./install_skills.js";
-import {
-  buildHookEntries,
-  isEleanorHookEntry,
-  type ClaudeHookEntry,
-} from "./hook_templates.js";
+import { deregisterHooks } from "./hook_registry.js";
 
 const ELEANOR_MCP_ENTRY_NAME = "eleanor4devs";
 
@@ -125,7 +121,8 @@ export interface InstallOptions {
 
 export interface InstallResult {
   mcpEntryWritten: boolean;
-  hookEntriesWritten: boolean;
+  /** True on every run — install prunes stale eleanor4devs hooks and registers none ([[DD-69]]). */
+  staleHooksPruned: boolean;
   skillsInstalled: string[];
   skillsSkipped: string[];
   /** True on every install run — the slash-command file is always written (overwrite-safe). */
@@ -136,7 +133,10 @@ export interface InstallResult {
 
 export async function install(options: InstallOptions): Promise<InstallResult> {
   writeMcpEntry(options.mcpConfigPath);
-  writeHookEntries(options.settingsPath);
+  // Phase 26 ([[DD-69]]): register NO hooks; prune any stale eleanor4devs
+  // entries a prior version left behind. The four lifecycle hooks are added
+  // by the first `/e4d` opt-in (deregisterHooks no-ops when none present).
+  deregisterHooks(options.settingsPath);
   writeSlashCommand(options.commandsDir);
   const stateInitialized = initializeStateFile(options.statePath);
   const skillsResult = await installSkills({
@@ -146,7 +146,7 @@ export async function install(options: InstallOptions): Promise<InstallResult> {
   });
   return {
     mcpEntryWritten: true,
-    hookEntriesWritten: true,
+    staleHooksPruned: true,
     skillsInstalled: skillsResult.installed,
     skillsSkipped: skillsResult.skipped,
     slashCommandWritten: true,
@@ -210,51 +210,4 @@ function writeMcpEntry(configPath: string): void {
     },
   };
   writeFileSync(configPath, JSON.stringify(merged, null, 2) + "\n", "utf-8");
-}
-
-/**
- * Write the 4 eleanor4devs hook entries to ~/.claude/settings.json.
- *
- * Merge rules:
- *   - Other agents' hooks (different matcher) are preserved untouched.
- *   - Pre-existing eleanor4devs entries (matcher === "eleanor4devs") are
- *     REMOVED before adding the new ones, so re-runs are idempotent and
- *     stale commands don't pile up.
- *   - Hook events not produced by us (PreToolUse, PostToolUse, etc.)
- *     are left exactly as-is.
- */
-function writeHookEntries(settingsPath: string): void {
-  mkdirSync(dirname(settingsPath), { recursive: true });
-  const existing: { hooks?: Record<string, ClaudeHookEntry[]> } = existsSync(
-    settingsPath,
-  )
-    ? (JSON.parse(readFileSync(settingsPath, "utf-8")) as {
-        hooks?: Record<string, ClaudeHookEntry[]>;
-      })
-    : {};
-
-  const existingHooks: Record<string, ClaudeHookEntry[]> =
-    existing.hooks ?? {};
-  const ourEntries = buildHookEntries();
-  const mergedHooks: Record<string, ClaudeHookEntry[]> = {};
-
-  // Start with every event the user already had — but strip any
-  // eleanor4devs-owned entries (identified by command prefix, or the
-  // legacy "eleanor4devs" matcher from ≤v0.0.12) from each event's list
-  // so we can add fresh ones below. Other agents' hooks are untouched.
-  for (const [eventName, list] of Object.entries(existingHooks)) {
-    mergedHooks[eventName] = list.filter((e) => !isEleanorHookEntry(e));
-  }
-
-  // Append our entries, preserving other agents' entries in the same event.
-  for (const [eventName, list] of Object.entries(ourEntries)) {
-    const prior = mergedHooks[eventName] ?? [];
-    mergedHooks[eventName] = [...prior, ...list];
-  }
-
-  const merged = {
-    ...existing,
-    hooks: mergedHooks,
-  };
-  writeFileSync(settingsPath, JSON.stringify(merged, null, 2) + "\n", "utf-8");
 }

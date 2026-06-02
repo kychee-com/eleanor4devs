@@ -1,25 +1,16 @@
 /**
- * Tests for hook-template installation (Phase 8 — Claude Local Box).
+ * Tests for install's hook handling (Phase 26 — [[DD-69]], lazy registration).
  *
- * Spec: docs/products/eleanor4devs/eleanor4devs-spec.md § Provider Boxes:
- *   "Hook lifecycle (per Symphony pattern #4) — `after_create / before_run
- *   / after_run / before_remove` with `timeout_ms` and explicit failure
- *   semantics (`after_create` fatal; `after_run` logged-and-ignored)."
+ * Spec v0.15.0 § Local Reporting Control + Auth & Reporting Pipeline:
+ *   `eleanor4devs install` registers NO Claude Code hooks. Instead it PRUNES
+ *   any stale eleanor4devs hook entries left in `~/.claude/settings.json` by a
+ *   prior version (DD-64 hygiene), deleting any event key it empties and
+ *   touching only eleanor4devs entries. The four lifecycle hooks are registered
+ *   lazily by the first `/e4d` opt-in (see hook_registry.test.ts).
  *
- * Plan: docs/plans/eleanor4devs-plan.md Phase 8 — "Claude Code hook
- * templates: `after_create / before_run / after_run / before_remove`;
- * written by `eleanor4devs install` to user's `~/.claude/settings.json`".
- *
- * Mapping (Eleanor logical hook → Claude Code event name):
- *   after_create   → SessionStart
- *   before_run     → UserPromptSubmit
- *   after_run      → Stop
- *   before_remove  → SessionEnd
- *
- * The 4 hook entries are written to `~/.claude/settings.json` under the
- * `hooks` key. The install MUST merge — existing entries from other agents
- * are preserved, and an existing eleanor4devs entry is replaced in place
- * (not duplicated).
+ * Mapping (Eleanor logical hook → Claude Code event name) is unchanged:
+ *   after_create → SessionStart, before_run → UserPromptSubmit,
+ *   after_run → Stop, before_remove → SessionEnd.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -34,7 +25,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { install } from "../src/commands/install.js";
+import { install, type InstallOptions } from "../src/commands/install.js";
 import { ALWAYS_APPLY } from "../src/commands/install_skills.js";
 import {
   ELEANOR_HOOK_EVENT_MAP,
@@ -62,129 +53,73 @@ interface ClaudeSettings {
   >;
 }
 
-describe("install — Claude Code hook templates", () => {
-  it("writes the 4 hook entries (after_create/before_run/after_run/before_remove) to settings.json on fresh install", async () => {
-    const home = freshHomeDir();
-    const mcpConfigPath = join(home, ".claude", "mcp_servers.json");
-    const settingsPath = join(home, ".claude", "settings.json");
-    const skillsTargetDir = join(home, ".claude", "skills", "eleanor4devs");
-    try {
-      await install({
-        mcpConfigPath,
-        settingsPath,
-        skillsSourceDir: PACKAGED_SKILLS,
-        skillsTargetDir,
-        commandsDir: join(home, ".claude", "commands"),
-        statePath: join(home, ".eleanor4devs", "state.json"),
-        review: ALWAYS_APPLY,
-      });
+/** Build a complete InstallOptions for a fresh temp home. */
+function baseOpts(home: string, settingsPath: string): InstallOptions {
+  return {
+    mcpConfigPath: join(home, ".claude", "mcp_servers.json"),
+    settingsPath,
+    skillsSourceDir: PACKAGED_SKILLS,
+    skillsTargetDir: join(home, ".claude", "skills", "eleanor4devs"),
+    commandsDir: join(home, ".claude", "commands"),
+    statePath: join(home, ".eleanor4devs", "state.json"),
+    review: ALWAYS_APPLY,
+  };
+}
 
-      expect(existsSync(settingsPath)).toBe(true);
-      const settings = JSON.parse(
+/** Count eleanor4devs hook entries across every event (0 when no file). */
+function e4dHookCount(settingsPath: string): number {
+  if (!existsSync(settingsPath)) return 0;
+  const s = JSON.parse(readFileSync(settingsPath, "utf-8")) as ClaudeSettings;
+  return Object.values(s.hooks ?? {})
+    .flat()
+    .filter((e) => isEleanorHookEntry(e)).length;
+}
+
+describe("install — prunes stale eleanor4devs hooks, registers none (Phase 26, DD-69)", () => {
+  it("registers ZERO eleanor4devs hooks on a fresh install", async () => {
+    const home = freshHomeDir();
+    const settingsPath = join(home, ".claude", "settings.json");
+    try {
+      await install(baseOpts(home, settingsPath));
+      expect(e4dHookCount(settingsPath)).toBe(0);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("prunes pre-existing eleanor4devs hook entries (left by an earlier version) and deletes the emptied event keys", async () => {
+    const home = freshHomeDir();
+    const settingsPath = join(home, ".claude", "settings.json");
+    try {
+      mkdirSync(dirname(settingsPath), { recursive: true });
+      // A machine upgraded from a build that registered hooks at install time:
+      // all four eleanor4devs entries present (the canonical shape).
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({ hooks: buildHookEntries() }),
+        "utf-8",
+      );
+
+      await install(baseOpts(home, settingsPath));
+
+      expect(e4dHookCount(settingsPath)).toBe(0);
+      const s = JSON.parse(
         readFileSync(settingsPath, "utf-8"),
       ) as ClaudeSettings;
-      expect(settings.hooks).toBeDefined();
-      // All 4 Claude Code event names that Eleanor's logical hooks map to.
-      for (const [, claudeEvent] of Object.entries(ELEANOR_HOOK_EVENT_MAP)) {
-        const entries = settings.hooks?.[claudeEvent] ?? [];
-        expect(entries.length).toBeGreaterThan(0);
-        // Exactly one of them must be ours, identified by command prefix.
-        const ours = entries.filter((e) => isEleanorHookEntry(e));
-        expect(ours).toHaveLength(1);
-        // The hook must shell out to the eleanor4devs CLI.
-        expect(ours[0]!.hooks).toHaveLength(1);
-        expect(ours[0]!.hooks[0]!.type).toBe("command");
-        expect(ours[0]!.hooks[0]!.command).toMatch(/eleanor4devs hook /);
+      // Each now-empty event key is removed entirely (not left as `[]`).
+      for (const event of Object.values(ELEANOR_HOOK_EVENT_MAP)) {
+        expect(s.hooks?.[event]).toBeUndefined();
       }
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });
 
-  it("preserves existing hooks from other agents when merging", async () => {
+  it("prunes a legacy (≤v0.0.12, matcher='eleanor4devs') entry too", async () => {
     const home = freshHomeDir();
-    const mcpConfigPath = join(home, ".claude", "mcp_servers.json");
     const settingsPath = join(home, ".claude", "settings.json");
-    const skillsTargetDir = join(home, ".claude", "skills", "eleanor4devs");
     try {
       mkdirSync(dirname(settingsPath), { recursive: true });
-      writeFileSync(
-        settingsPath,
-        JSON.stringify({
-          hooks: {
-            SessionStart: [
-              {
-                matcher: "some-other-agent",
-                hooks: [
-                  {
-                    type: "command",
-                    command: "other-agent-cli hook session-start",
-                  },
-                ],
-              },
-            ],
-            PreToolUse: [
-              {
-                matcher: "Bash",
-                hooks: [
-                  { type: "command", command: "user-pre-bash-hook.sh" },
-                ],
-              },
-            ],
-          },
-        }),
-        "utf-8",
-      );
-
-      await install({
-        mcpConfigPath,
-        settingsPath,
-        skillsSourceDir: PACKAGED_SKILLS,
-        skillsTargetDir,
-        commandsDir: join(home, ".claude", "commands"),
-        statePath: join(home, ".eleanor4devs", "state.json"),
-        review: ALWAYS_APPLY,
-      });
-
-      const settings = JSON.parse(
-        readFileSync(settingsPath, "utf-8"),
-      ) as ClaudeSettings;
-
-      // Pre-existing entries preserved.
-      const sessionStart = settings.hooks?.SessionStart ?? [];
-      const other = sessionStart.find((e) => e.matcher === "some-other-agent");
-      expect(other).toBeDefined();
-      expect(other!.hooks[0]!.command).toBe(
-        "other-agent-cli hook session-start",
-      );
-
-      // Pre-existing PreToolUse entry (untouched event) survives intact.
-      expect(settings.hooks?.PreToolUse).toEqual([
-        {
-          matcher: "Bash",
-          hooks: [{ type: "command", command: "user-pre-bash-hook.sh" }],
-        },
-      ]);
-
-      // Our entries are present alongside.
-      const ours = sessionStart.find((e) => isEleanorHookEntry(e));
-      expect(ours).toBeDefined();
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
-
-  it("replaces an existing eleanor4devs hook entry in place (no duplicates on re-install)", async () => {
-    const home = freshHomeDir();
-    const mcpConfigPath = join(home, ".claude", "mcp_servers.json");
-    const settingsPath = join(home, ".claude", "settings.json");
-    const skillsTargetDir = join(home, ".claude", "skills", "eleanor4devs");
-    try {
-      mkdirSync(dirname(settingsPath), { recursive: true });
-      // Pre-existing LEGACY (≤v0.0.12) eleanor4devs entry: the broken
-      // matcher "eleanor4devs" + an older command shape. Re-install must
-      // detect + remove it (via the legacy-matcher branch of
-      // isEleanorHookEntry) and replace it with the corrected entry.
       writeFileSync(
         settingsPath,
         JSON.stringify({
@@ -205,68 +140,77 @@ describe("install — Claude Code hook templates", () => {
         "utf-8",
       );
 
-      // First install.
-      await install({
-        mcpConfigPath,
-        settingsPath,
-        skillsSourceDir: PACKAGED_SKILLS,
-        skillsTargetDir,
-        commandsDir: join(home, ".claude", "commands"),
-        statePath: join(home, ".eleanor4devs", "state.json"),
-        review: ALWAYS_APPLY,
-      });
+      await install(baseOpts(home, settingsPath));
 
-      // Second install (idempotent re-run).
-      await install({
-        mcpConfigPath,
-        settingsPath,
-        skillsSourceDir: PACKAGED_SKILLS,
-        skillsTargetDir,
-        commandsDir: join(home, ".claude", "commands"),
-        statePath: join(home, ".eleanor4devs", "state.json"),
-        review: ALWAYS_APPLY,
-      });
-
-      const settings = JSON.parse(
-        readFileSync(settingsPath, "utf-8"),
-      ) as ClaudeSettings;
-      const ours = (settings.hooks?.SessionStart ?? []).filter((e) =>
-        isEleanorHookEntry(e),
-      );
-      // Exactly one eleanor4devs entry, despite running install twice
-      // and starting from a pre-existing stale (legacy-matcher) entry.
-      expect(ours).toHaveLength(1);
-      // And the broken legacy matcher is gone — replaced with match-all "".
-      expect(ours[0]!.matcher).toBe("");
-      // The command was upgraded from the old binary name.
-      expect(ours[0]!.hooks[0]!.command).not.toMatch(/old-eleanor4devs-binary/);
-      expect(ours[0]!.hooks[0]!.command).toMatch(/eleanor4devs hook /);
+      expect(e4dHookCount(settingsPath)).toBe(0);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
   });
 
-  it("creates a settings.json that is valid JSON and round-trips through JSON.parse", async () => {
+  it("prunes eleanor4devs entries but preserves a foreign-agent entry in the same event", async () => {
     const home = freshHomeDir();
-    const mcpConfigPath = join(home, ".claude", "mcp_servers.json");
     const settingsPath = join(home, ".claude", "settings.json");
-    const skillsTargetDir = join(home, ".claude", "skills", "eleanor4devs");
+    const foreign = {
+      matcher: "some-other-agent",
+      hooks: [
+        { type: "command", command: "other-agent-cli hook session-start" },
+      ],
+    };
     try {
-      await install({
-        mcpConfigPath,
+      mkdirSync(dirname(settingsPath), { recursive: true });
+      writeFileSync(
         settingsPath,
-        skillsSourceDir: PACKAGED_SKILLS,
-        skillsTargetDir,
-        commandsDir: join(home, ".claude", "commands"),
-        statePath: join(home, ".eleanor4devs", "state.json"),
-        review: ALWAYS_APPLY,
+        JSON.stringify({
+          hooks: { SessionStart: [foreign, ...buildHookEntries().SessionStart] },
+        }),
+        "utf-8",
+      );
+
+      await install(baseOpts(home, settingsPath));
+
+      expect(e4dHookCount(settingsPath)).toBe(0);
+      const s = JSON.parse(
+        readFileSync(settingsPath, "utf-8"),
+      ) as ClaudeSettings;
+      // Foreign entry survives; its event key is NOT deleted (still populated).
+      expect(s.hooks?.SessionStart).toEqual([foreign]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a foreign-only settings.json byte-for-byte untouched (nothing to prune)", async () => {
+    const home = freshHomeDir();
+    const settingsPath = join(home, ".claude", "settings.json");
+    try {
+      mkdirSync(dirname(settingsPath), { recursive: true });
+      const original = JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            { matcher: "Bash", hooks: [{ type: "command", command: "x.sh" }] },
+          ],
+        },
       });
-      const raw = readFileSync(settingsPath, "utf-8");
-      // JSON.parse alone is the test — any syntax errors throw.
-      const parsed = JSON.parse(raw) as ClaudeSettings;
-      expect(parsed.hooks).toBeDefined();
-      // Trailing newline is present (matches mcp_servers.json convention).
-      expect(raw.endsWith("\n")).toBe(true);
+      writeFileSync(settingsPath, original, "utf-8");
+
+      await install(baseOpts(home, settingsPath));
+
+      // The prune is a no-op when there are no eleanor4devs entries — it must
+      // not rewrite (or reformat) an unrelated settings file.
+      expect(readFileSync(settingsPath, "utf-8")).toBe(original);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("re-install is idempotent — still zero eleanor4devs hooks", async () => {
+    const home = freshHomeDir();
+    const settingsPath = join(home, ".claude", "settings.json");
+    try {
+      await install(baseOpts(home, settingsPath));
+      await install(baseOpts(home, settingsPath));
+      expect(e4dHookCount(settingsPath)).toBe(0);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -294,8 +238,6 @@ describe("buildHookEntries — canonical hook template shape", () => {
 
   it("REGRESSION (v0.0.13): SessionStart/SessionEnd matcher is NOT 'eleanor4devs' — that matched no session source so the hook never fired", () => {
     const entries = buildHookEntries();
-    // The match-all matcher is the empty string; the legacy "eleanor4devs"
-    // matcher silently disabled SessionStart + SessionEnd.
     expect(ELEANOR_HOOK_MATCHER).toBe("");
     for (const event of ["SessionStart", "SessionEnd"] as const) {
       const m = entries[event]![0]!.matcher;

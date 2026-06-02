@@ -114,6 +114,14 @@ jobs:
         # strings — that one stays, and this one is the pre-test build.
         run: npm run build --workspaces --if-present
 
+      - name: Type-check (tsc — src + test files, incl. expectTypeOf)
+        # Vitest's experimental in-band typecheck was removed — it crashes on
+        # TypeScript 6 (`Cannot read properties of undefined (reading 'config')`).
+        # The rest of the Kychee ecosystem (kysigned, run402-mcp) type-checks
+        # with a standalone tsc; we do the same. `tsc -p tsconfig.test.json`
+        # validates src + test files (and the `expectTypeOf` assertions).
+        run: npm run typecheck --workspaces --if-present
+
       - name: Run full test suite (skip live-network regression tests)
         # Live-network tests (npm_published, voice_deploy, marketing_site)
         # are POST-publish verification, not pre-publish gates. They check

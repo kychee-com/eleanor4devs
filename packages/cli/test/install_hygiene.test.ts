@@ -15,6 +15,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -95,14 +96,34 @@ const canCreateSymlink = platform() !== "win32";
 describe.skipIf(!canCreateSymlink)(
   "install hygiene — settings.json symlink-awareness",
   () => {
-    it("when settings.json is a symlink, install writes through to the real file", async () => {
+    it("when settings.json is a symlink, install PRUNES stale e4d hooks through to the real file without clobbering the symlink", async () => {
       const dir = freshTempDir();
       try {
-        // The "real" file lives in a sibling directory.
+        // The "real" file lives in a sibling directory and carries a stale
+        // eleanor4devs hook entry (as an older, install-time-registering
+        // version would have left) plus a foreign key. Phase 26 ([[DD-69]])
+        // install registers NO hooks; it only PRUNES pre-existing e4d entries,
+        // so the prune is the one case where install writes settings.json.
         const realDir = join(dir, "real-config");
         mkdirSync(realDir, { recursive: true });
         const realSettings = join(realDir, "settings.json");
-        writeFileSync(realSettings, JSON.stringify({ existing: true }), "utf-8");
+        writeFileSync(
+          realSettings,
+          JSON.stringify({
+            existing: true,
+            hooks: {
+              SessionStart: [
+                {
+                  matcher: "",
+                  hooks: [
+                    { type: "command", command: "eleanor4devs hook after_create" },
+                  ],
+                },
+              ],
+            },
+          }),
+          "utf-8",
+        );
 
         // The path install touches is a symlink into realDir.
         const symlinkedSettings = join(dir, "settings.json");
@@ -117,15 +138,18 @@ describe.skipIf(!canCreateSymlink)(
           statePath: join(dir, "state.json"),
           review: ALWAYS_APPLY,
         });
-        // The write reached the REAL file (Node's writeFileSync follows
-        // symlinks). Group F adds an optional `notify` callback that
-        // surfaces the resolved path to the user — for Group A we just
-        // pin the write-through behavior.
+
+        // The prune reached the REAL file: the only e4d entry was removed and
+        // its emptied SessionStart key dropped, so `hooks` is gone entirely.
         const realContent = JSON.parse(readFileSync(realSettings, "utf-8"));
-        expect(realContent.hooks).toBeDefined();
+        expect(realContent.hooks).toBeUndefined();
+        // The foreign key is preserved ([[DD-64]] — touch only e4d entries).
+        expect(realContent.existing).toBe(true);
+        // The symlink-aware write resolved + wrote THROUGH the link — it did
+        // NOT replace the symlink with a regular file ([[DD-64]] hazard).
+        expect(lstatSync(symlinkedSettings).isSymbolicLink()).toBe(true);
         // Sanity: the resolved real path is the realSettings path.
-        const resolved = realpathSync(symlinkedSettings);
-        expect(resolved).toBe(realpathSync(realSettings));
+        expect(realpathSync(symlinkedSettings)).toBe(realpathSync(realSettings));
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

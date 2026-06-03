@@ -43,10 +43,13 @@
  * user's local opt-in choice; the backend mirrors it.
  */
 import {
+  countEnabledSessions,
+  pruneStaleSessions,
   readSessionReporting,
   setSessionReporting,
 } from "../state.js";
 import { appendAuditEntry } from "../audit.js";
+import { deregisterHooks, registerHooks } from "./hook_registry.js";
 import {
   readRefreshToken,
   refreshToAccessToken,
@@ -59,6 +62,14 @@ export interface ToggleOpts {
   sessionId: string;
   /** Path to ~/.eleanor4devs/state.json. */
   statePath: string;
+  /**
+   * Path to `~/.claude/settings.json` — where the four lifecycle hooks are
+   * registered on opt-IN and de-registered on the last opt-OUT (Phase 26,
+   * [[DD-69]]). Optional only for tests that don't exercise hook registration;
+   * the CLI entrypoint always injects the real path. When absent, the local
+   * gate + audit still happen but no hooks are (de)registered.
+   */
+  settingsPath?: string;
   /** Path to ~/.eleanor4devs/audit.log. */
   auditLogPath: string;
   /** Path to ~/.eleanor4devs/auth.json (the stored refresh_token). */
@@ -90,8 +101,60 @@ function warnOf(opts: ToggleOpts): (text: string) => void {
   );
 }
 
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function isUnsubstitutedTemplate(value: string): boolean {
   return value === SUBST_LITERAL || value.startsWith("${");
+}
+
+/**
+ * Reconcile the four lifecycle hooks in settings.json with the local opt-in
+ * set after a toggle ([[DD-69]]/[[DD-70]]). Best-effort + NON-FATAL: every
+ * settings/state mutation here is wrapped so a failure only warns — the local
+ * gate flip and the audit line (the privacy-relevant facts) already happened /
+ * still happen regardless (privacy-monotonic).
+ *
+ *   - Opportunistically prune stale sibling records at the toggle write path,
+ *     so an opt-in that was abandoned without `/e4d` off can't keep the hooks
+ *     registered forever ([[DD-70]]).
+ *   - opt-IN  → `registerHooks` (idempotent — no duplicate if already present).
+ *   - opt-OUT → `deregisterHooks` ONLY when no enabled record remains (counted
+ *     AFTER the prune), returning the machine to zero eleanor4devs hooks.
+ *
+ * No-op for `settingsPath === undefined` (tests that don't exercise hook
+ * registration). The prune still runs (it touches state.json, not settings).
+ */
+function syncHookRegistration(
+  opts: ToggleOpts,
+  newValue: boolean,
+  now: Date,
+): void {
+  const warn = warnOf(opts);
+  // Prune is independent of the register/deregister decision; isolate its
+  // failure so a prune error can't stop the hooks from (de)registering.
+  try {
+    pruneStaleSessions(now, { statePath: opts.statePath });
+  } catch (err) {
+    warn(`eleanor4devs toggle: stale-prune skipped (${errText(err)})`);
+  }
+  const settingsPath = opts.settingsPath;
+  if (settingsPath === undefined) {
+    return;
+  }
+  try {
+    if (newValue) {
+      registerHooks(settingsPath);
+    } else if (countEnabledSessions({ statePath: opts.statePath }) === 0) {
+      deregisterHooks(settingsPath);
+    }
+  } catch (err) {
+    warn(
+      `eleanor4devs toggle: hook ${newValue ? "registration" : "de-registration"} ` +
+        `skipped (settings.json write failed: ${errText(err)})`,
+    );
+  }
 }
 
 interface BackendResult {
@@ -180,7 +243,8 @@ export async function runToggle(opts: ToggleOpts): Promise<number> {
 
   // (2) Read current state and compute the new value.
   const nowFn = opts.now ?? (() => new Date());
-  const ts = nowFn().toISOString();
+  const nowDate = nowFn();
+  const ts = nowDate.toISOString();
   const current = readSessionReporting(opts.sessionId, {
     statePath: opts.statePath,
   });
@@ -192,6 +256,12 @@ export async function runToggle(opts: ToggleOpts): Promise<number> {
     statePath: opts.statePath,
     now: nowFn,
   });
+
+  // (3.5) Reconcile the lazy hook registration with the new local opt-in set
+  //       ([[DD-69]]/[[DD-70]]). Non-fatal: the local gate already flipped in
+  //       (3) and the audit line still appends in (6), no matter what happens
+  //       to settings.json here (privacy-monotonic).
+  syncHookRegistration(opts, newValue, nowDate);
 
   // (4) Best-effort backend POST.
   const backend = await postBackend(opts, newValue);

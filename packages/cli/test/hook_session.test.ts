@@ -79,6 +79,12 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
+// The opt-in timestamp for every opted-in session below. The runHook calls
+// also pass `now: () => new Date(FIXED_NOW)` so the Phase 26 staleness prune
+// ([[DD-70]]) measures zero elapsed time against this same instant — keeping
+// these Phase 23 gate/feedback assertions wall-clock-independent (without the
+// pin, a session toggled here would read as >72h-dormant on a later run date
+// and get pruned mid-hook).
 const FIXED_NOW = "2026-05-31T10:00:00.000Z";
 
 // ---------------------------------------------------------------------------
@@ -103,6 +109,7 @@ describe("runHook — per-session gate (interference fix)", () => {
         credentialsPath,
         auditLogPath,
         fetch,
+        now: () => new Date(FIXED_NOW),
       });
       expect(result.ok).toBe(true);
       expect(result.fatal).toBe(false);
@@ -134,6 +141,7 @@ describe("runHook — per-session gate (interference fix)", () => {
         credentialsPath,
         auditLogPath,
         fetch,
+        now: () => new Date(FIXED_NOW),
       });
       expect(result.ok).toBe(true);
       expect(calls).toEqual([]);
@@ -197,6 +205,7 @@ describe("runHook — per-session gate (interference fix)", () => {
         credentialsPath,
         auditLogPath,
         fetch,
+        now: () => new Date(FIXED_NOW),
       });
       expect(result.ok).toBe(true);
       expect(calls).toHaveLength(2);
@@ -229,6 +238,7 @@ describe("runHook — missing session_id in stdin", () => {
         credentialsPath,
         auditLogPath,
         fetch,
+        now: () => new Date(FIXED_NOW),
       });
       expect(result.ok).toBe(true);
       expect(result.fatal).toBe(false);
@@ -275,6 +285,7 @@ describe("runHook — disabled-cache local half", () => {
         credentialsPath,
         auditLogPath,
         fetch,
+        now: () => new Date(FIXED_NOW),
       });
       // Local state should now be disabled for SID_A.
       expect(readSessionReporting(SID_A, { statePath }).enabled).toBe(false);
@@ -288,6 +299,7 @@ describe("runHook — disabled-cache local half", () => {
         credentialsPath,
         auditLogPath,
         fetch,
+        now: () => new Date(FIXED_NOW),
       });
       expect(calls.length).toBe(before);
     } finally {
@@ -319,6 +331,7 @@ describe("runHook — disabled-cache local half", () => {
         credentialsPath,
         auditLogPath,
         fetch,
+        now: () => new Date(FIXED_NOW),
       });
       // ONLY reason="disabled" flips the local gate. orphan/other → leave it.
       expect(readSessionReporting(SID_A, { statePath }).enabled).toBe(true);
@@ -353,6 +366,7 @@ describe("runHook — non-fatal invariant", () => {
         credentialsPath,
         auditLogPath,
         fetch,
+        now: () => new Date(FIXED_NOW),
       });
       expect(result.ok).toBe(true);
       expect(result.fatal).toBe(false);
@@ -385,6 +399,7 @@ describe("runHook — non-fatal invariant", () => {
         credentialsPath,
         auditLogPath,
         fetch,
+        now: () => new Date(FIXED_NOW),
       });
       expect(result.ok).toBe(true);
       expect(result.userMessage).toMatch(/isn't linked|not linked/);
@@ -426,6 +441,7 @@ describe("runHook — visible feedback (DD-48)", () => {
         credentialsPath,
         auditLogPath,
         fetch,
+        now: () => new Date(FIXED_NOW),
       });
       expect(result.userMessage).toContain("registered");
     } finally {
@@ -449,6 +465,7 @@ describe("runHook — visible feedback (DD-48)", () => {
         credentialsPath,
         auditLogPath,
         fetch,
+        now: () => new Date(FIXED_NOW),
       });
       expect(result.ok).toBe(true);
       expect(result.userMessage).toBeUndefined();
@@ -473,6 +490,7 @@ describe("runHook — visible feedback (DD-48)", () => {
         credentialsPath,
         auditLogPath,
         fetch,
+        now: () => new Date(FIXED_NOW),
       });
       expect(result.ok).toBe(true);
       // Spec line 143-144: merely starting a session never surfaces the

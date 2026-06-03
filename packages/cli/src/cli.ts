@@ -78,7 +78,7 @@ export async function main(argv: string[]): Promise<number> {
       });
       // eslint-disable-next-line no-console
       console.log(
-        `installed: ${result.skillsInstalled.length} skill(s); mcp entry written; hook entries written; /e4d slash command ${result.slashCommandWritten ? "written" : "skipped"}; reporting state ${result.stateInitialized ? "initialized to OFF" : "preserved"}.`,
+        `installed: ${result.skillsInstalled.length} skill(s); mcp entry written; stale eleanor4devs hooks pruned (none registered — the first /e4d on registers them); /e4d slash command ${result.slashCommandWritten ? "written" : "skipped"}; reporting state ${result.stateInitialized ? "initialized to OFF" : "preserved"}.`,
       );
       return 0;
     }
@@ -101,6 +101,9 @@ export async function main(argv: string[]): Promise<number> {
         backendUrl,
         stdinJson,
         statePath: STATE_PATH,
+        // Phase 26 ([[DD-70]]): a stale-prune that empties the enabled set
+        // de-registers the four hooks from here.
+        settingsPath: SETTINGS_PATH,
         credentialsPath: CREDENTIALS_PATH,
         auditLogPath: DEFAULT_AUDIT_LOG_PATH,
       });
@@ -165,6 +168,9 @@ export async function main(argv: string[]): Promise<number> {
       return runToggle({
         sessionId,
         statePath: STATE_PATH,
+        // Phase 26 ([[DD-69]]): opt-IN registers the four lifecycle hooks here;
+        // the last opt-OUT (or a pruned stale set) de-registers them.
+        settingsPath: SETTINGS_PATH,
         auditLogPath: DEFAULT_AUDIT_LOG_PATH,
         credentialsPath: CREDENTIALS_PATH,
         backendUrl: process.env.ELEANOR4DEVS_API_BASE ?? DEFAULT_API_BASE,

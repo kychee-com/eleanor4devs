@@ -46,9 +46,12 @@
  */
 import { appendAuditEntry } from "../audit.js";
 import {
+  pruneStaleSessions,
   readSessionReporting,
+  refreshLastSeen,
   setSessionReporting,
 } from "../state.js";
+import { deregisterHooks } from "./hook_registry.js";
 import {
   ELEANOR_HOOK_NAMES,
   type EleanorHookName,
@@ -132,10 +135,19 @@ export interface RunHookOptions {
   fetch?: typeof globalThis.fetch;
   /** Per-session reporting state file path. */
   statePath?: string;
+  /**
+   * Path to `~/.claude/settings.json` (Phase 26, [[DD-70]]). When a stale-prune
+   * empties the enabled set, the four lifecycle hooks de-register here. The CLI
+   * entrypoint always injects it; absent only in tests that don't assert
+   * de-registration (the prune itself still runs on `statePath`).
+   */
+  settingsPath?: string;
   /** Credential file path. Defaults to DEFAULT_CREDENTIALS_PATH. */
   credentialsPath?: string;
   /** Audit-log path for local failure records (DD-48). */
   auditLogPath?: string;
+  /** Clock for the staleness prune/refresh. Defaults to `() => new Date()`. */
+  now?: () => Date;
 }
 
 /** Strip a UTF-8 BOM + trailing whitespace from a stdin payload. */
@@ -191,6 +203,39 @@ function notLinked(isStart: boolean): HookCallResult {
   };
 }
 
+/**
+ * Opportunistic local-staleness housekeeping for an opted-in session whose
+ * gate has just passed (Phase 26, [[DD-70]]). ALL best-effort + non-fatal —
+ * wrapped so a failure NEVER aborts the hook (spec line 397).
+ *
+ * Order is load-bearing: PRUNE first, THEN refresh. A >window-dormant session
+ * firing a hook is PRUNED (DD-70 bounds auto-reactivation at the window —
+ * recovery requires a fresh `/e4d` on, which revives the same `thread_id`), not
+ * kept alive by a refresh-first stamp. If the prune empties the machine's
+ * enabled set, the now-orphaned four hooks de-register.
+ *
+ * The gate already returned for a non-opted-in session, so this never runs —
+ * and therefore never mutates state / settings — for one (the Phase 23 gate).
+ */
+function syncStaleness(opts: RunHookOptions, sessionId: string): void {
+  const now = (opts.now ?? (() => new Date()))();
+  const statePathOpts =
+    opts.statePath !== undefined ? { statePath: opts.statePath } : {};
+  try {
+    const remaining = pruneStaleSessions(now, statePathOpts);
+    if (remaining === 0 && opts.settingsPath !== undefined) {
+      deregisterHooks(opts.settingsPath);
+    }
+  } catch (err) {
+    auditFailure(opts, `staleness_prune_failed: ${errText(err)}`);
+  }
+  try {
+    refreshLastSeen(sessionId, now, statePathOpts);
+  } catch (err) {
+    auditFailure(opts, `last_seen_refresh_failed: ${errText(err)}`);
+  }
+}
+
 /** Parse session_id out of the stdin payload. Returns null on any failure. */
 function extractSessionId(stdinJson: string): string | null {
   const normalized = normalizeStdin(stdinJson);
@@ -227,6 +272,12 @@ export async function runHook(opts: RunHookOptions): Promise<HookCallResult> {
   if (!state.enabled) {
     return { ok: true, fatal: false };
   }
+
+  // (2.5) Opted in: opportunistic local-staleness housekeeping (Phase 26,
+  // [[DD-70]]) — prune stale records (de-registering the hooks if the enabled
+  // set just emptied), then a debounced `last_seen_at` refresh. Non-fatal; runs
+  // only for opted-in sessions, so a non-opted-in session mutates nothing.
+  syncStaleness(opts, sessionId);
 
   // (3) Credential — opted-in but no credential → guide (only on SessionStart).
   const credPath = opts.credentialsPath ?? DEFAULT_CREDENTIALS_PATH;

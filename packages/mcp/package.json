@@ -1,6 +1,6 @@
 {
   "name": "@eleanor4devs/mcp",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "description": "Eleanor MCP server — single declarative verb `report({event, ...})`. Strict credential isolation. See spec §MCP and DD-11.",
   "repository": {
     "type": "git",

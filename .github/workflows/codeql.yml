@@ -1,0 +1,24 @@
+name: CodeQL
+
+# Static security analysis for the @eleanor4devs/* package sources. Mirrors the
+# sibling public repo kychee-com/run402-mcp's codeql.yml: on push + PR to main,
+# plus a weekly scheduled scan. Free for public repos.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@v3

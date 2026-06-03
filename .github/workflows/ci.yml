@@ -1,0 +1,65 @@
+name: CI
+
+# Regression gate for the @eleanor4devs/* packages. Runs the FULL test +
+# typecheck suite on every PR and every push to main — so package breakage is
+# caught at push time, not only at /publish (publish-all.yml's pre-publish
+# gate). Mirrors the convention used by the sibling public repo
+# kychee-com/run402-mcp (its test.yml) and the private repo's ci.yml.
+#
+# A workflow running is NOT the same as a workflow blocking: to make this a
+# required check (red CI prevents a merge), enable branch protection on `main`
+# requiring the "CI / Node / TypeScript (20)" + "(22)" checks
+# (Settings -> Branches, or `gh api`). See the repo's release docs.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Node / TypeScript
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22]
+    env:
+      # Live-network tests (npm_published, cli_auth_live, cli_version_live,
+      # voice_deploy, marketing_site) verify ALREADY-published/deployed
+      # artifacts — they are post-publish checks, not pre-merge gates. Skip
+      # them here, exactly as publish-all.yml's pre-publish test step does.
+      ELEANOR4DEVS_SKIP_LIVE_NPM: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # Build BEFORE test: several tests spawn the built binary
+      # (node packages/<pkg>/dist/cli.js), so dist/ must exist first — same
+      # ordering as publish-all.yml's pre-test build step.
+      - name: Build all packages
+        run: npm run build --workspaces --if-present
+
+      - name: Type-check (tsc — src + tests, incl. expectTypeOf)
+        run: npm run typecheck --workspaces --if-present
+
+      - name: Test (all workspaces)
+        run: npm test

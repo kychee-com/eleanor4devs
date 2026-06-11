@@ -1,6 +1,10 @@
 /**
- * F-002 regression test — eleanor4devs.com serves install / privacy / FAQ
- * pages with the required spec content.
+ * Marketing-site live regression — eleanor4devs.com.
+ *
+ * CURRENT STATE (2026-06-11): the site is GATED behind a coming-soon page
+ * pre-launch; the live suite below pins THAT state. The original F-002
+ * content suite (install / privacy / FAQ invariants) is preserved in git
+ * history and comes back when the site is un-gated.
  *
  * Live network test against the deployed Amplify app. Skip with
  * ELEANOR4DEVS_SKIP_LIVE_NPM=1 (same gate as the other live network
@@ -49,63 +53,48 @@ async function fetchBody(path: string): Promise<string> {
   return res.text();
 }
 
-describe.skipIf(SKIP_LIVE)("F-002 regression — marketing site content", () => {
-  it("landing page has Start on Telegram CTA pointing at the bot", async () => {
+/**
+ * GATED (Barry, 2026-06-11): the public marketing site is deliberately
+ * serving a coming-soon page pre-launch — the full F-002 content suite
+ * (Telegram CTA, install instructions, privacy, FAQ security entry —
+ * AC-137..AC-139) is withdrawn from the live site, NOT removed from the
+ * product. The pages live in the private repo's git history; RESTORE by
+ * reverting the private gating commit and the matching public-repo commit
+ * that replaced the describe below (the original tests are in this file's
+ * git history).
+ */
+describe.skipIf(SKIP_LIVE)("marketing site gated — coming-soon state", () => {
+  it("landing serves the coming-soon page, noindexed, with no product CTA", async () => {
     const html = await fetchBody("/");
-    expect(html).toMatch(/href="https:\/\/t\.me\/eleanor4devs_bot"/);
-    expect(html).toMatch(/Start on Telegram/i);
-    // No more "Under construction" — the placeholder line is gone.
-    expect(html).not.toMatch(/Under construction/i);
+    expect(html).toMatch(/coming soon/i);
+    expect(html).toMatch(/<meta name="robots" content="noindex, nofollow">/);
+    expect(html).not.toMatch(/Start on Telegram/i);
+    expect(html).not.toMatch(/t\.me\/eleanor4devs_bot/);
   });
 
-  it("install page has copy-paste command + Node 20+ note", async () => {
-    const html = await fetchBody("/install/");
-    expect(html).toMatch(/npm install -g @eleanor4devs\/cli/);
-    expect(html).toMatch(/eleanor4devs install/);
-    expect(html).toMatch(/Node 20/);
+  it("robots.txt disallows everything", async () => {
+    const body = await fetchBody("/robots.txt");
+    expect(body).toMatch(/User-agent:\s*\*/);
+    expect(body).toMatch(/Disallow:\s*\//);
   });
 
-  it("install page does NOT carry the stale mid-bootstrap notice (P3-3)", async () => {
-    // Cycle 3 P3-3 polish: the "Heads up — packages mid-bootstrap" notice
-    // was true during the F-001 bootstrap window but became misleading
-    // once v0.0.3 went live. Negative assertion ensures any future
-    // stale-copy revert breaks CI.
-    const html = await fetchBody("/install/");
-    expect(html).not.toMatch(/mid-bootstrap/i);
-    expect(html).not.toMatch(/packages aren['’]t live/i);
-  });
-
-  it("privacy page covers no-new-vector principle + logout (F-009)", async () => {
-    const html = await fetchBody("/privacy/");
-    expect(html).toMatch(/no-new-vector/i);
-    expect(html).toMatch(/eleanor4devs logout/);
-    expect(html).not.toMatch(/auth revoke/);
-  });
-
-  it("FAQ page contains the required tap-to-call security entry", async () => {
-    const html = await fetchBody("/faq/");
-    // Per spec acceptance criterion: must state (a) 30-second TTL,
-    // (b) single-use rule, (c) rejected-attempt security alert.
-    expect(html, "Expected 30-second TTL").toMatch(
-      /30[- ]?(second|s)\s*TTL/i,
-    );
-    expect(html, "Expected single-use rule").toMatch(/single[- ]?use/i);
-    expect(html, "Expected rejected-attempt security alert").toMatch(
-      /(security|real-time)\s*alert/i,
-    );
-  });
-
-  it("FAQ page covers the provider matrix", async () => {
-    const html = await fetchBody("/faq/");
-    expect(html).toMatch(/Claude Code/i);
-    expect(html).toMatch(/Codex/i);
-    expect(html).toMatch(/provider/i);
-  });
-
-  it("FAQ page explains how to sign out (logout) of Eleanor (F-009)", async () => {
-    const html = await fetchBody("/faq/");
-    expect(html).toMatch(/eleanor4devs logout/);
-    expect(html).not.toMatch(/auth revoke/);
+  it("the former content pages no longer serve product documentation", async () => {
+    for (const path of ["/install/", "/faq/", "/privacy/", "/security/"]) {
+      const res = await fetch(`${MARKETING_ORIGIN}${path}`);
+      const body = await res.text();
+      // Either the path is gone (4xx) or a rewrite serves the coming-soon
+      // shell — never the withdrawn product docs.
+      if (res.status === 200) {
+        expect(body, `${path} should serve coming-soon, not docs`).toMatch(
+          /coming soon/i,
+        );
+      } else {
+        expect(res.status, `${path} expected 4xx`).toBeGreaterThanOrEqual(400);
+      }
+      expect(body).not.toMatch(/npm install -g @eleanor4devs\/cli/);
+      expect(body).not.toMatch(/tap-to-call/i);
+      expect(body).not.toMatch(/no-new-vector/i);
+    }
   });
 });
 

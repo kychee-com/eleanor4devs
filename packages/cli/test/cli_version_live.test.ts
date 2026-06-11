@@ -14,6 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
 
 const REGISTRY_URL = "https://registry.npmjs.org/@eleanor4devs/cli";
 const NPX_TIMEOUT_MS = 90_000; // npx -y fetch can be slow on a cold cache
@@ -38,13 +39,17 @@ describe.skipIf(SKIP_LIVE)(
         expect(latest, "Expected dist-tags.latest on @eleanor4devs/cli").toBeTruthy();
         expect(latest).toMatch(/^\d+\.\d+\.\d+(-[\w.-]+)?$/);
 
-        // (b) Run the published binary via npx from outside the repo
-        //     (cwd is the package dir, but `npx -y <name>@<ver>` fetches
-        //     from the registry, never the local repo).
+        // (b) Run the published binary via npx from a NEUTRAL cwd. With
+        //     cwd inside this workspace, `npm exec` resolves a spec that
+        //     matches the LOCAL workspace package and runs the local bin
+        //     instead of the registry artifact (discovered Phase 29) —
+        //     a neutral cwd forces the registry path this test exists
+        //     to smoke.
         const stdout = execFileSync(
           "npx",
           ["-y", `@eleanor4devs/cli@${latest}`, "--version"],
           {
+            cwd: tmpdir(),
             encoding: "utf-8",
             timeout: NPX_TIMEOUT_MS,
             shell: true,

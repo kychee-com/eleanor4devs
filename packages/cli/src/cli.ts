@@ -13,6 +13,7 @@
  *
  * Spec: docs/products/eleanor4devs/eleanor4devs-spec.md § CLI.
  */
+import { realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { homedir } from "node:os";
@@ -308,20 +309,37 @@ function printHelp(): void {
 }
 
 /**
+ * Symlink-robust entrypoint comparison: realpath BOTH sides before
+ * comparing. `import.meta.url` is already symlink-resolved by node (the
+ * module's REAL file), while `argv1` is whatever path the invoker used —
+ * through an npm-workspace link, `npm link`, or a junctioned layout that
+ * is the `node_modules/@eleanor4devs/cli/...` LINK path. A lexical
+ * compare never matches there, and `main()` silently never dispatched
+ * (exit 0, no output). Exported for tests.
+ */
+export function entrypointHrefMatches(
+  argv1: string | undefined,
+  moduleUrl: string,
+): boolean {
+  if (!argv1) return false;
+  try {
+    const argvHref = pathToFileURL(realpathSync(resolve(argv1))).href;
+    const moduleHref = pathToFileURL(realpathSync(fileURLToPath(moduleUrl))).href;
+    return argvHref === moduleHref;
+  } catch {
+    // argv1 (or the module path) doesn't resolve on disk — not our entrypoint.
+    return false;
+  }
+}
+
+/**
  * Auto-invoke `main` only when this file is the entrypoint — never when
  * it's imported (e.g. from a test that wants to call `main([...])` with
- * a fake argv). The ESM-safe entrypoint check compares this file's URL
- * to the process's argv[1] URL.
+ * a fake argv).
  */
 function isCliEntrypoint(): boolean {
   // eslint-disable-next-line no-undef
-  const argv1 = process.argv[1];
-  if (!argv1) return false;
-  try {
-    return import.meta.url === pathToFileURL(resolve(argv1)).href;
-  } catch {
-    return false;
-  }
+  return entrypointHrefMatches(process.argv[1], import.meta.url);
 }
 
 if (isCliEntrypoint()) {

@@ -20,9 +20,10 @@
 import { FORBIDDEN_REPORT_ARG_KEYS, REPORT_EVENTS } from "./index.js";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const requireFrom = createRequire(import.meta.url);
 
@@ -391,20 +392,38 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
 }
 
-// Detect "am I being run as a script?". When the bin is invoked via
-// `node dist/cli.js`, `import.meta.url` points at the cli.js file and
-// `process.argv[1]` resolves to the same path. When this file is
-// imported as a module (unit tests), the two differ and we DO NOT
-// auto-dispatch. Uses createRequire because raw `require` is not
-// defined in ESM (package.json has "type": "module").
-function isCliEntrypoint(): boolean {
-  if (typeof process === "undefined" || !process.argv?.[1]) return false;
+/**
+ * Symlink-robust entrypoint comparison: realpath BOTH sides before
+ * comparing. `import.meta.url` is symlink-resolved by node (the module's
+ * REAL file), while `argv1` is whatever path the invoker used — through
+ * an npm-workspace link, `npm link`, or a junctioned layout it is the
+ * `node_modules/@eleanor4devs/mcp/...` LINK path. A lexical compare
+ * never matches there, and `main()` silently never dispatched (exit 0,
+ * no output). Exported for tests.
+ */
+export function entrypointHrefMatches(
+  argv1: string | undefined,
+  moduleUrl: string,
+): boolean {
+  if (!argv1) return false;
   try {
-    const entryUrl = pathToFileURL(process.argv[1]).href;
-    return entryUrl === import.meta.url;
+    const argvHref = pathToFileURL(realpathSync(resolve(argv1))).href;
+    const moduleHref = pathToFileURL(realpathSync(fileURLToPath(moduleUrl))).href;
+    return argvHref === moduleHref;
   } catch {
+    // argv1 (or the module path) doesn't resolve on disk — not our entrypoint.
     return false;
   }
+}
+
+// Detect "am I being run as a script?". When the bin is invoked via
+// `node dist/cli.js` (directly or through a bin-shim symlink),
+// `import.meta.url` and `process.argv[1]` realpath to the same file.
+// When this file is imported as a module (unit tests), they differ and
+// we DO NOT auto-dispatch.
+function isCliEntrypoint(): boolean {
+  if (typeof process === "undefined") return false;
+  return entrypointHrefMatches(process.argv?.[1], import.meta.url);
 }
 
 if (isCliEntrypoint()) {

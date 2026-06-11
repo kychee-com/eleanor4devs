@@ -40,9 +40,14 @@ function runMcp(
   stdin?: string,
   env?: NodeJS.ProcessEnv,
 ): { stdout: string; stderr: string; status: number | null } {
+  // `--min-release-age=0` pins DEFAULT-user semantics: a dev machine with a
+  // `min-release-age` quarantine in ~/.npmrc would otherwise resolve @latest
+  // to the newest version OLDER than the window (silently testing the
+  // previous release for N days after every publish). A real fresh user has
+  // no quarantine — the override tests what they experience.
   const res = spawnSync(
     "npx",
-    ["-y", `@eleanor4devs/mcp@latest`, ...args],
+    ["-y", "--min-release-age=0", `@eleanor4devs/mcp@latest`, ...args],
     {
       encoding: "utf-8",
       input: stdin,
@@ -65,9 +70,12 @@ function runMcp(
  */
 function packLatest(): { path: string; version: string } {
   const dir = mkdtempSync(join(tmpdir(), "eleanor4devs-mcp-pack-"));
+  // Same default-user pin as runMcp: without it, a quarantined dev machine
+  // packs the newest version OLDER than the window while npx (pinned) runs
+  // the true latest — a guaranteed integrity_mismatch after every publish.
   const res = spawnSync(
     "npm",
-    ["pack", "@eleanor4devs/mcp@latest", "--silent"],
+    ["pack", "@eleanor4devs/mcp@latest", "--silent", "--min-release-age=0"],
     {
       cwd: dir,
       encoding: "utf-8",

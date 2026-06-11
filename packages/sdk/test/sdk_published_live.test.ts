@@ -63,9 +63,19 @@ describe.skipIf(SKIP_LIVE)(
         expect(latest).toMatch(/^\d+\.\d+\.\d+(-[\w.-]+)?$/);
 
         // (b) Install the latest @eleanor4devs/sdk into the tempdir.
+        //     `--min-release-age=0` pins DEFAULT-user semantics: a dev
+        //     machine with a `min-release-age` quarantine in ~/.npmrc would
+        //     ETARGET on a just-published exact version for the quarantine
+        //     window. A real fresh user has no quarantine.
         execFileSync(
           "npm",
-          ["install", `@eleanor4devs/sdk@${latest}`, "--no-audit", "--no-fund"],
+          [
+            "install",
+            `@eleanor4devs/sdk@${latest}`,
+            "--no-audit",
+            "--no-fund",
+            "--min-release-age=0",
+          ],
           {
             cwd: tempDir!,
             stdio: "inherit",

@@ -37,6 +37,14 @@ packages/
 
 This is a monorepo using npm workspaces. All 4 packages release lockstep at the same version via the `publish-all.yml` workflow.
 
+## Validation profiles (test tiers)
+
+Tests follow the product's three-profile partition (spec AC-145):
+
+- **Core** — offline: `ELEANOR4DEVS_SKIP_LIVE_NPM=1 npm test`. Every live-network regression test self-gates on that env var (pinned monorepo-wide by `packages/sdk/test/core_profile_offline.test.ts`), so the gated run passes with no network access (AC-102).
+- **Extension** — real network against the npm registry and the deployed surfaces: `npm test` (the default — includes the live tests).
+- **Real Integration** — real vendor APIs; exercised by the private repo's backend suite and the Red Team's `/systemtest` cycles against the deployed product, not from this repo.
+
 ## Release process
 
 All releases go through the GitHub Actions `publish-all.yml` workflow using npm's Trusted Publisher OIDC federation — **no stored npm tokens**. Each published version has cryptographic provenance attestation linking the binary to the GitHub Actions run that produced it. Verify any release via:

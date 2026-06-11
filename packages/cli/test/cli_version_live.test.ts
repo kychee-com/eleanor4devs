@@ -45,9 +45,15 @@ describe.skipIf(SKIP_LIVE)(
         //     instead of the registry artifact (discovered Phase 29) —
         //     a neutral cwd forces the registry path this test exists
         //     to smoke.
+        //     `--min-release-age=0` pins DEFAULT-user semantics: a dev
+        //     machine hardened with a `min-release-age` quarantine in
+        //     ~/.npmrc would otherwise refuse a just-published version
+        //     (ETARGET) for the quarantine window, failing this test for
+        //     N days after every release. A real fresh user has no such
+        //     quarantine — the override tests what they experience.
         const stdout = execFileSync(
           "npx",
-          ["-y", `@eleanor4devs/cli@${latest}`, "--version"],
+          ["-y", "--min-release-age=0", `@eleanor4devs/cli@${latest}`, "--version"],
           {
             cwd: tmpdir(),
             encoding: "utf-8",

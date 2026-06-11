@@ -10,6 +10,7 @@
  *   eleanor4devs auth                             (Task 9)
  *   eleanor4devs toggle --session <id>            (Phase 23 — per-session)
  *   eleanor4devs status                           (Phase 19/21)
+ *   eleanor4devs uninstall [--yes]                (Phase 29 — AC-147..AC-152)
  *
  * Spec: docs/products/eleanor4devs/eleanor4devs-spec.md § CLI.
  */
@@ -27,6 +28,11 @@ import {
 import { listSkills } from "./commands/skills_list.js";
 import { authFlow, parseAuthArgs, TestModeNotEnabledError } from "./commands/auth.js";
 import { runLogout } from "./commands/logout.js";
+import {
+  renderUninstallOutcome,
+  runUninstall,
+  uninstallExitCode,
+} from "./commands/uninstall.js";
 import { parseHookArgs, readStdin, runHook } from "./commands/hook.js";
 import { runToggle } from "./commands/toggle.js";
 import { runStatus } from "./commands/status.js";
@@ -251,6 +257,49 @@ export async function main(argv: string[]): Promise<number> {
         errorLog: (text: string) => console.error(text),
       });
     }
+    case "uninstall": {
+      // Phase 29 (spec v0.17.0, AC-147..AC-152): remove every eleanor4devs
+      // artifact except the npm package itself. The sweep logic lives in
+      // commands/uninstall.ts (tested with injected paths); this glue
+      // resolves the canonical paths, supplies the readline confirmation,
+      // and renders the outcome + the printed-only npm final step.
+      const result = await runUninstall({
+        mcpConfigPath: MCP_CONFIG_PATH,
+        settingsPath: SETTINGS_PATH,
+        skillsTargetDir: SKILLS_TARGET_DIR,
+        agentSkillsTwinDir: join(homedir(), ".agent", "skills", "eleanor4devs"),
+        commandsDir: COMMANDS_DIR,
+        stateDir: join(homedir(), ".eleanor4devs"),
+        statePath: STATE_PATH,
+        credentialsPath:
+          process.env.ELEANOR4DEVS_CREDENTIALS_PATH ?? CREDENTIALS_PATH,
+        backendUrl: process.env.ELEANOR4DEVS_API_BASE ?? DEFAULT_API_BASE,
+        yes: rest.includes("--yes"),
+        isTTY: Boolean(process.stdin.isTTY),
+        confirm: async (summary: string) => {
+          // eslint-disable-next-line no-console
+          console.log(summary);
+          const { createInterface } = await import("node:readline/promises");
+          const rl = createInterface({
+            input: process.stdin,
+            output: process.stdout,
+          });
+          try {
+            const answer = await rl.question("Proceed? [y/N] ");
+            return /^y(es)?$/i.test(answer.trim());
+          } finally {
+            rl.close();
+          }
+        },
+        // eslint-disable-next-line no-console
+        log: (text: string) => console.log(text),
+        // eslint-disable-next-line no-console
+        errorLog: (text: string) => console.error(text),
+      });
+      // eslint-disable-next-line no-console
+      renderUninstallOutcome(result, (text: string) => console.log(text));
+      return uninstallExitCode(result.outcome);
+    }
     case "skills": {
       if (rest[0] === "list") {
         const skills = listSkills({ targetDir: SKILLS_TARGET_DIR });
@@ -295,6 +344,10 @@ function printHelp(): void {
       "  eleanor4devs status               show linked state + recent-sessions table",
       "  eleanor4devs auth                 link this CLI to your Telegram account",
       "  eleanor4devs logout               revoke the stored token + clear the local credential",
+      "  eleanor4devs uninstall [--yes]    remove every eleanor4devs artifact except the npm",
+      "                                    package itself (hooks, MCP entry, /e4d commands,",
+      "                                    skills, ~/.eleanor4devs); asks first unless --yes;",
+      "                                    finishes by printing: npm uninstall -g @eleanor4devs/cli",
       "  eleanor4devs auth --test-mode <code>",
       "                                    one-shot test-mode bypass (Red Team",
       "                                    /systemtest only; backend must run",

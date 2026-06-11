@@ -337,6 +337,20 @@ export function countEnabledSessions(opts: StatePathOpts = {}): number {
 }
 
 /**
+ * Sorted ids of every `enabled:true` per-session record. Fail-closed like
+ * `countEnabledSessions` (absent / corrupt / v1 file → `[]`). Consumed by
+ * `eleanor4devs uninstall`'s backend best-effort step, which reports each
+ * enabled session `disabled` before the local sweep (Phase 29, [[DD-74]]).
+ */
+export function listEnabledSessions(opts: StatePathOpts = {}): string[] {
+  const path = opts.statePath ?? DEFAULT_STATE_PATH;
+  return Object.entries(readV2Records(path))
+    .filter(([, r]) => r.enabled)
+    .map(([sid]) => sid)
+    .sort();
+}
+
+/**
  * Drop every per-session record whose effective activity time
  * (`last_seen_at` ?? `toggled_at`) is older than the staleness window, and
  * return the count of ENABLED records that remain ([[DD-70]]). A record with

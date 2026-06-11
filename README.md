@@ -63,6 +63,7 @@ See https://eleanor4devs.com/privacy/. Short version:
 - Local audit log at `~/.eleanor4devs/audit.log` records every call's hashed digest. Raw payloads stay local.
 - Only **hashed payload digests** + session metadata leave the user's machine, not raw `report` contents.
 - Sign out a CLI install (revokes its backend token, then deletes the local credential) with `eleanor4devs logout`.
+- Remove eleanor4devs entirely with `eleanor4devs uninstall` — it sweeps every local artifact (hooks, MCP entry, slash commands, skill packs, `~/.eleanor4devs`), best-effort disables your opted-in sessions and revokes the credential when linked, and finishes by printing the one remaining step: `npm uninstall -g @eleanor4devs/cli`.
 
 ## Reporting issues
 

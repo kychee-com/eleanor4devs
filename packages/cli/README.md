@@ -34,6 +34,9 @@ Confirms your auth, prints the connected Telegram identity, lists the threads El
 ### `/e4d-status` (Claude Code slash command)
 Read-only counterpart to `/e4d`: prints the current `eleanor4devs status` output (linked state + recent-sessions table) plus this session's own reporting state. Never mutates anything.
 
+### `eleanor4devs uninstall [--yes]`
+The clean reverse of `install` — removes every eleanor4devs artifact on the machine **except the npm package itself**: the Claude Code lifecycle hook entries (when registered), the eleanor4devs MCP entry in `~/.claude/mcp_servers.json`, the `/e4d` + `/e4d-status` slash commands, the installed skill packs, and `~/.eleanor4devs` (per-session reporting state, device credential, local audit log). Other agents' hooks, MCP entries, commands, and skills are preserved untouched. On a linked machine it first (best-effort) reports your opted-in sessions as disabled and revokes the device credential server-side — an unreachable backend never blocks the local removal. Interactive runs list what will be removed and ask first; `--yes` skips the prompt (required for non-interactive use). Idempotent — a second run reports nothing to remove. It finishes by printing the one step it does not perform: `npm uninstall -g @eleanor4devs/cli`.
+
 ### `eleanor4devs --version`
 Prints the CLI version.
 
@@ -52,10 +55,11 @@ Releases are lockstep across all 4 `@eleanor4devs/*` packages (`provider-contrac
 ## Uninstall
 
 ```bash
-eleanor4devs logout && npm uninstall -g @eleanor4devs/cli
+eleanor4devs uninstall
+npm uninstall -g @eleanor4devs/cli
 ```
 
-Revokes the backend OAuth token, then removes the CLI binary. The MCP entry in `~/.claude/mcp_servers.json` remains until you delete it manually — we don't edit a file we did not exclusively own.
+`eleanor4devs uninstall` removes everything the installer and the `/e4d` opt-ins put on the machine — hooks, MCP entry, slash commands, skill packs, `~/.eleanor4devs` — preserving every other agent's entries, and on a linked machine best-effort disables your opted-in sessions and revokes the device credential. The npm package itself is the one artifact left; remove it with the second command (uninstall prints it as the final step). `eleanor4devs logout` alone suffices when you only want to unlink this machine and keep the install.
 
 ## Coexistence with dotfile/AGENTS.md setups
 
